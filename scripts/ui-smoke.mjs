@@ -271,11 +271,11 @@ async function runAutomationHooksScenario() {
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Jouer en Local/i }).click();
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(100);
 
   const before = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
   const zeroStepAdvance = await page.evaluate(() => window.advanceTime?.(0) ?? null);
-  await page.waitForTimeout(360);
+  await page.waitForTimeout(90);
   const afterNoop = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
 
   await page.evaluate(async () => {

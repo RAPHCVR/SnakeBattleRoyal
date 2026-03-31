@@ -124,6 +124,15 @@ export function App() {
     !isMenu && !splitTouchLocal && !touchMode && !touchOnlineFocusMode && !mobileMenu && !desktopGameMode;
   const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
   const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
+  const networkChipAccent = toNetworkChipAccent(online.network.quality);
+  const latencyChipLabel = toLatencyChipLabel(online.network.latencyMs);
+  const jitterChipLabel = toJitterChipLabel(online.network.jitterMs);
+  const predictionChipLabel =
+    online.network.pendingInputs > 0
+      ? `Queue ${online.network.pendingInputs}`
+      : online.network.predictionLeadTicks > 0
+        ? `Lead +${online.network.predictionLeadTicks}`
+        : "Sync stable";
   const phaseLabel = isMenu
     ? "Menu"
     : isMatchmaking
@@ -156,7 +165,7 @@ export function App() {
   const touchSummaryLabel = showOnlineWaiting
     ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
     : isOnline
-      ? online.ownSnakeId?.toUpperCase() ?? "ONLINE"
+      ? `${online.ownSnakeId?.toUpperCase() ?? "ONLINE"} • ${latencyChipLabel}`
       : paused
         ? "PAUSE"
         : "RUN";
@@ -283,6 +292,13 @@ export function App() {
                 {isOnline && online.ownSnakeId ? (
                   <InfoChip label={online.ownSnakeId.toUpperCase()} />
                 ) : null}
+                {isOnline ? (
+                  <>
+                    <InfoChip label={latencyChipLabel} accent={networkChipAccent} />
+                    <InfoChip label={jitterChipLabel} compact />
+                    <InfoChip label={predictionChipLabel} compact />
+                  </>
+                ) : null}
                 {isMenu ? (
                   <>
                     <InfoChip label="Wrap arena" />
@@ -408,46 +424,43 @@ export function App() {
               )}
             </div>
 
-            <AnimatePresence>
-              {isMenu ? (
-                <motion.div
-                  key="menu"
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16, ease: "easeOut" }}
-                  className="overlay-panel"
-                >
-                  <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Duel prêt</h2>
-                  <p className="mt-2 max-w-md text-center text-sm text-slate-300">
-                    Joue en local instantané ou en ligne via Colyseus matchmaking.
-                  </p>
-                  <div className="mt-6 flex flex-wrap justify-center gap-3">
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={handleStartLocalGame}
-                      onPointerEnter={primePhaserViewport}
-                      onFocus={primePhaserViewport}
-                    >
-                      Jouer en Local
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={handleStartOnlineMatchmaking}
-                      onPointerEnter={primePhaserViewport}
-                      onFocus={primePhaserViewport}
-                    >
-                      Jouer en Ligne
-                    </button>
-                  </div>
-                  {online.lastError ? (
-                    <p className="mt-4 text-center text-xs text-rose-300">{online.lastError}</p>
-                  ) : null}
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
+            {isMenu ? (
+              <motion.div
+                key="menu"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="overlay-panel"
+              >
+                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Duel prêt</h2>
+                <p className="mt-2 max-w-md text-center text-sm text-slate-300">
+                  Joue en local instantané ou en ligne via Colyseus matchmaking.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={handleStartLocalGame}
+                    onPointerEnter={primePhaserViewport}
+                    onFocus={primePhaserViewport}
+                  >
+                    Jouer en Local
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={handleStartOnlineMatchmaking}
+                    onPointerEnter={primePhaserViewport}
+                    onFocus={primePhaserViewport}
+                  >
+                    Jouer en Ligne
+                  </button>
+                </div>
+                {online.lastError ? (
+                  <p className="mt-4 text-center text-xs text-rose-300">{online.lastError}</p>
+                ) : null}
+              </motion.div>
+            ) : null}
 
             <AnimatePresence>
               {isMatchmaking ? (
@@ -714,4 +727,26 @@ function toControlLabel(mode: string): string {
     return "Connexion en cours au matchmaking Colyseus...";
   }
   return "Choisissez un mode puis lancez la partie.";
+}
+
+function toLatencyChipLabel(latencyMs: number | null): string {
+  return latencyMs === null ? "Ping --" : `Ping ${latencyMs}ms`;
+}
+
+function toJitterChipLabel(jitterMs: number | null): string {
+  return jitterMs === null ? "Jitter --" : `Jitter ${jitterMs}ms`;
+}
+
+function toNetworkChipAccent(
+  quality: "unknown" | "excellent" | "good" | "fair" | "poor",
+): "teal" | "orange" | "slate" {
+  if (quality === "excellent" || quality === "good") {
+    return "teal";
+  }
+
+  if (quality === "fair" || quality === "poor") {
+    return "orange";
+  }
+
+  return "slate";
 }

@@ -3,6 +3,7 @@ import {
   type Direction,
   type GameState,
   type GridPosition,
+  type ProcessedInputSequences,
   type SnakeId,
   type SnakeState,
   type TickEvent,
@@ -15,6 +16,7 @@ export interface TickTransition {
   readonly next: GameState;
   readonly foodEatenAt: GridPosition | null;
   readonly fatalCollision: boolean;
+  readonly durationMs: number;
 }
 
 export interface SessionSummary {
@@ -22,6 +24,8 @@ export interface SessionSummary {
   readonly player1Wins: number;
   readonly player2Wins: number;
 }
+
+export type NetworkQuality = "unknown" | "excellent" | "good" | "fair" | "poor";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -41,6 +45,7 @@ export function computeTransition(
   next: GameState,
   tick: number,
   tickEvent: TickEvent | null = null,
+  durationMs = next.config.tickRateMs,
 ): TickTransition {
   const beforeFood = previous.food ? { ...previous.food } : null;
   const foodEatenAt = tickEvent?.consumedFoodPosition
@@ -61,6 +66,7 @@ export function computeTransition(
     next,
     foodEatenAt,
     fatalCollision,
+    durationMs,
   };
 }
 
@@ -105,6 +111,7 @@ export function toTickEvent(networkState: unknown): TickEvent | null {
       ? toGridPosition(data.consumedFoodPosition)
       : null,
     eliminatedSnakeIds,
+    processedInputSequences: toProcessedInputSequences(networkState),
   };
 }
 
@@ -116,6 +123,65 @@ export function toSessionSummary(networkState: unknown): SessionSummary {
     player1Wins: toFiniteNumber(data.player1Wins, 0),
     player2Wins: toFiniteNumber(data.player2Wins, 0),
   });
+}
+
+export function toProcessedInputSequences(networkState: unknown): ProcessedInputSequences {
+  const data = isRecord(networkState) ? networkState : {};
+
+  return {
+    player1: toFiniteNumber(data.player1ProcessedInputSequence, 0),
+    player2: toFiniteNumber(data.player2ProcessedInputSequence, 0),
+  };
+}
+
+export function toRngSeed(networkState: unknown): number {
+  const data = isRecord(networkState) ? networkState : {};
+  return Math.max(1, toFiniteNumber(data.rngSeed, 1));
+}
+
+export function estimateSnakeHeadCorrection(
+  previous: GameState,
+  next: GameState,
+  snakeId: SnakeId,
+): number {
+  const previousSnake = previous.snakes.find((snake) => snake.id === snakeId);
+  const nextSnake = next.snakes.find((snake) => snake.id === snakeId);
+  const previousHead = previousSnake?.body[0];
+  const nextHead = nextSnake?.body[0];
+
+  if (!previousHead || !nextHead) {
+    return 0;
+  }
+
+  const dx = Math.abs(previousHead.x - nextHead.x);
+  const dy = Math.abs(previousHead.y - nextHead.y);
+  const wrappedDx = Math.min(dx, Math.max(0, previous.config.width - dx));
+  const wrappedDy = Math.min(dy, Math.max(0, previous.config.height - dy));
+
+  return wrappedDx + wrappedDy;
+}
+
+export function toNetworkQuality(
+  latencyMs: number | null,
+  jitterMs: number | null,
+): NetworkQuality {
+  if (latencyMs === null || jitterMs === null) {
+    return "unknown";
+  }
+
+  if (latencyMs <= 45 && jitterMs <= 8) {
+    return "excellent";
+  }
+
+  if (latencyMs <= 85 && jitterMs <= 16) {
+    return "good";
+  }
+
+  if (latencyMs <= 130 && jitterMs <= 28) {
+    return "fair";
+  }
+
+  return "poor";
 }
 
 function hasAnyScoreIncrement(previous: GameState, next: GameState): boolean {

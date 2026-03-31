@@ -13,15 +13,27 @@ import {
 
 export type RandomFn = () => number;
 
+export interface QueuedDirectionInput {
+  readonly direction: Direction;
+  readonly sequence?: number;
+}
+
 export interface InputBuffers {
-  readonly player1: readonly Direction[];
-  readonly player2: readonly Direction[];
+  readonly player1: readonly QueuedDirectionInput[];
+  readonly player2: readonly QueuedDirectionInput[];
+}
+
+export interface ProcessedInputSequences {
+  readonly player1: number;
+  readonly player2: number;
 }
 
 export interface EngineRuntime {
   readonly tick: number;
   readonly game: GameState;
   readonly inputBuffers: InputBuffers;
+  readonly processedInputSequences: ProcessedInputSequences;
+  readonly rngSeed: number;
   readonly lastTickEvent: TickEvent | null;
 }
 
@@ -29,15 +41,33 @@ export interface CreateRuntimeOptions {
   readonly config?: Partial<GameConfig>;
   readonly random?: RandomFn;
   readonly initialStatus?: GameStatus;
+  readonly seed?: number;
+}
+
+export interface CreateRuntimeFromGameStateOptions {
+  readonly tick?: number;
+  readonly inputBuffers?: InputBuffers;
+  readonly processedInputSequences?: ProcessedInputSequences;
+  readonly rngSeed?: number;
+  readonly lastTickEvent?: TickEvent | null;
 }
 
 export interface QueueInputOptions {
   readonly maxBufferSize?: number;
 }
 
+export type QueueInputRejectReason =
+  | "invalid_direction"
+  | "game_over"
+  | "snake_unavailable"
+  | "buffer_full"
+  | "invalid_direction_change";
+
 export interface QueueInputResult {
   readonly runtime: EngineRuntime;
   readonly accepted: boolean;
+  readonly reason: QueueInputRejectReason | null;
+  readonly queuedInput: QueuedDirectionInput | null;
 }
 
 export interface SnakeGameEngineOptions extends CreateRuntimeOptions {
@@ -48,6 +78,7 @@ export interface TickEvent {
   readonly tick: number;
   readonly consumedFoodPosition: GridPosition | null;
   readonly eliminatedSnakeIds: readonly SnakeId[];
+  readonly processedInputSequences: ProcessedInputSequences;
 }
 
 interface PlannedMove {
@@ -60,6 +91,10 @@ interface PlannedMove {
 const MIN_GRID_WIDTH = 8;
 const MIN_GRID_HEIGHT = 2;
 const DEFAULT_INPUT_BUFFER_SIZE = 3;
+const DEFAULT_RNG_SEED = 1;
+const RNG_MODULUS = 0x100000000;
+const RNG_MULTIPLIER = 1664525;
+const RNG_INCREMENT = 1013904223;
 
 const DIRECTION_VECTORS: Readonly<Record<Direction, GridPosition>> = Object.freeze({
   up: { x: 0, y: -1 },
@@ -161,23 +196,54 @@ export function createEmptyInputBuffers(): InputBuffers {
   };
 }
 
+export function createEmptyProcessedInputSequences(): ProcessedInputSequences {
+  return {
+    player1: 0,
+    player2: 0,
+  };
+}
+
 export function createRuntime(options: CreateRuntimeOptions = {}): EngineRuntime {
   return {
     tick: 0,
     game: createInitialGameState(options),
     inputBuffers: createEmptyInputBuffers(),
+    processedInputSequences: createEmptyProcessedInputSequences(),
+    rngSeed: resolveSeed(options),
     lastTickEvent: null,
+  };
+}
+
+export function createRuntimeFromGameState(
+  game: GameState,
+  options: CreateRuntimeFromGameStateOptions = {},
+): EngineRuntime {
+  return {
+    tick: options.tick ?? 0,
+    game: cloneGameState(game),
+    inputBuffers: options.inputBuffers ? cloneInputBuffers(options.inputBuffers) : createEmptyInputBuffers(),
+    processedInputSequences: options.processedInputSequences
+      ? cloneProcessedInputSequences(options.processedInputSequences)
+      : createEmptyProcessedInputSequences(),
+    rngSeed: normalizeSeed(options.rngSeed),
+    lastTickEvent: options.lastTickEvent ? cloneTickEvent(options.lastTickEvent) : null,
   };
 }
 
 export function queueInput(
   runtime: EngineRuntime,
   snakeId: SnakeId,
-  direction: unknown,
+  input: unknown,
   options: QueueInputOptions = {},
 ): QueueInputResult {
-  if (!isDirection(direction)) {
-    return { runtime, accepted: false };
+  const normalizedInput = normalizeQueuedInput(input);
+  if (!normalizedInput) {
+    return {
+      runtime,
+      accepted: false,
+      reason: "invalid_direction",
+      queuedInput: null,
+    };
   }
 
   const maxBufferSize = options.maxBufferSize ?? DEFAULT_INPUT_BUFFER_SIZE;
@@ -186,31 +252,59 @@ export function queueInput(
   }
 
   if (runtime.game.status === "game_over") {
-    return { runtime, accepted: false };
+    return {
+      runtime,
+      accepted: false,
+      reason: "game_over",
+      queuedInput: null,
+    };
   }
 
   const snake = runtime.game.snakes.find((candidate) => candidate.id === snakeId);
   if (!snake || !snake.alive) {
-    return { runtime, accepted: false };
+    return {
+      runtime,
+      accepted: false,
+      reason: "snake_unavailable",
+      queuedInput: null,
+    };
   }
 
   const currentBuffer = runtime.inputBuffers[snakeId];
   if (currentBuffer.length >= maxBufferSize) {
-    return { runtime, accepted: false };
+    return {
+      runtime,
+      accepted: false,
+      reason: "buffer_full",
+      queuedInput: null,
+    };
   }
 
   const referenceDirection =
-    currentBuffer.length > 0 ? currentBuffer[currentBuffer.length - 1] : snake.direction;
+    currentBuffer.length > 0 ? currentBuffer[currentBuffer.length - 1]?.direction : snake.direction;
 
   if (!referenceDirection) {
-    return { runtime, accepted: false };
+    return {
+      runtime,
+      accepted: false,
+      reason: "snake_unavailable",
+      queuedInput: null,
+    };
   }
 
-  if (direction === referenceDirection || areOppositeDirections(referenceDirection, direction)) {
-    return { runtime, accepted: false };
+  if (
+    normalizedInput.direction === referenceDirection ||
+    areOppositeDirections(referenceDirection, normalizedInput.direction)
+  ) {
+    return {
+      runtime,
+      accepted: false,
+      reason: "invalid_direction_change",
+      queuedInput: null,
+    };
   }
 
-  const nextBuffer = [...currentBuffer, direction];
+  const nextBuffer = [...currentBuffer, cloneQueuedInput(normalizedInput)];
 
   return {
     runtime: {
@@ -218,10 +312,12 @@ export function queueInput(
       inputBuffers: setInputBuffer(runtime.inputBuffers, snakeId, nextBuffer),
     },
     accepted: true,
+    reason: null,
+    queuedInput: cloneQueuedInput(normalizedInput),
   };
 }
 
-export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Math.random): EngineRuntime {
+export function advanceRuntimeTick(runtime: EngineRuntime, randomOverride?: RandomFn): EngineRuntime {
   if (runtime.game.status !== "running") {
     if (runtime.lastTickEvent === null) {
       return runtime;
@@ -235,6 +331,7 @@ export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Ma
 
   const plannedMoves: Partial<Record<SnakeId, PlannedMove>> = {};
   let nextInputBuffers = cloneInputBuffers(runtime.inputBuffers);
+  let nextProcessedInputSequences = cloneProcessedInputSequences(runtime.processedInputSequences);
 
   for (const snake of runtime.game.snakes) {
     if (!snake.alive) {
@@ -244,6 +341,13 @@ export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Ma
 
     const consumed = consumeQueuedDirection(snake.direction, nextInputBuffers[snake.id]);
     nextInputBuffers = setInputBuffer(nextInputBuffers, snake.id, consumed.remaining);
+    if (typeof consumed.acknowledgedSequence === "number") {
+      nextProcessedInputSequences = setProcessedInputSequence(
+        nextProcessedInputSequences,
+        snake.id,
+        consumed.acknowledgedSequence,
+      );
+    }
 
     plannedMoves[snake.id] = {
       snakeId: snake.id,
@@ -267,10 +371,13 @@ export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Ma
     winner: null,
   };
 
-  const nextFood =
-    runtime.game.food === null || eatenBy.size > 0
-      ? spawnFood(nextGameWithoutFood, random)
-      : runtime.game.food;
+  const shouldRespawnFood = runtime.game.food === null || eatenBy.size > 0;
+  const foodResult = shouldRespawnFood
+    ? spawnFoodFromSeed(nextGameWithoutFood, runtime.rngSeed, randomOverride)
+    : {
+        food: runtime.game.food ? clonePosition(runtime.game.food) : null,
+        nextSeed: runtime.rngSeed,
+      };
 
   const aliveSnakes = nextSnakes.filter((snake) => snake.alive);
   const nextStatus = aliveSnakes.length <= 1 ? "game_over" : runtime.game.status;
@@ -282,14 +389,17 @@ export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Ma
       status: nextStatus,
       config: runtime.game.config,
       snakes: nextSnakes,
-      food: nextFood,
+      food: foodResult.food,
       winner: nextStatus === "game_over" ? nextWinner : null,
     },
     inputBuffers: nextStatus === "game_over" ? createEmptyInputBuffers() : nextInputBuffers,
+    processedInputSequences: nextProcessedInputSequences,
+    rngSeed: foodResult.nextSeed,
     lastTickEvent: {
       tick: runtime.tick + 1,
       consumedFoodPosition: eatenBy.size > 0 && runtime.game.food ? clonePosition(runtime.game.food) : null,
       eliminatedSnakeIds: [...eliminated],
+      processedInputSequences: cloneProcessedInputSequences(nextProcessedInputSequences),
     },
   };
 
@@ -302,16 +412,19 @@ export class SnakeGameEngine {
   private readonly inputBufferSize: number;
   private readonly config: Partial<GameConfig>;
   private readonly initialStatus: GameStatus;
+  private readonly seed: number | undefined;
 
   public constructor(options: SnakeGameEngineOptions = {}) {
     this.random = options.random ?? Math.random;
     this.inputBufferSize = options.inputBufferSize ?? DEFAULT_INPUT_BUFFER_SIZE;
     this.config = options.config ?? {};
     this.initialStatus = options.initialStatus ?? "waiting";
+    this.seed = options.seed;
     this.runtime = createRuntime({
       config: this.config,
       random: this.random,
       initialStatus: this.initialStatus,
+      ...(this.seed !== undefined ? { seed: this.seed } : {}),
     });
   }
 
@@ -328,27 +441,23 @@ export class SnakeGameEngine {
   }
 
   public getLastTickEvent(): TickEvent | null {
-    return this.runtime.lastTickEvent
-      ? {
-          tick: this.runtime.lastTickEvent.tick,
-          consumedFoodPosition: this.runtime.lastTickEvent.consumedFoodPosition
-            ? clonePosition(this.runtime.lastTickEvent.consumedFoodPosition)
-            : null,
-          eliminatedSnakeIds: [...this.runtime.lastTickEvent.eliminatedSnakeIds],
-        }
-      : null;
+    return this.runtime.lastTickEvent ? cloneTickEvent(this.runtime.lastTickEvent) : null;
   }
 
-  public enqueueInput(snakeId: SnakeId, direction: unknown): boolean {
-    const result = queueInput(this.runtime, snakeId, direction, {
+  public enqueueInputWithResult(snakeId: SnakeId, input: unknown): QueueInputResult {
+    const result = queueInput(this.runtime, snakeId, input, {
       maxBufferSize: this.inputBufferSize,
     });
     this.runtime = result.runtime;
-    return result.accepted;
+    return result;
+  }
+
+  public enqueueInput(snakeId: SnakeId, input: unknown): boolean {
+    return this.enqueueInputWithResult(snakeId, input).accepted;
   }
 
   public tick(): GameState {
-    this.runtime = advanceRuntimeTick(this.runtime, this.random);
+    this.runtime = advanceRuntimeTick(this.runtime);
     return this.getState();
   }
 
@@ -357,6 +466,7 @@ export class SnakeGameEngine {
       config: this.config,
       random: this.random,
       initialStatus: status,
+      ...(this.seed !== undefined ? { seed: this.seed } : {}),
     });
     return this.getState();
   }
@@ -376,9 +486,10 @@ export class SnakeGameEngine {
 
 function consumeQueuedDirection(
   currentDirection: Direction,
-  queue: readonly Direction[],
-): { direction: Direction; remaining: readonly Direction[] } {
-  const remaining = [...queue];
+  queue: readonly QueuedDirectionInput[],
+): { direction: Direction; remaining: readonly QueuedDirectionInput[]; acknowledgedSequence: number | null } {
+  const remaining = queue.map(cloneQueuedInput);
+  let acknowledgedSequence: number | null = null;
 
   while (remaining.length > 0) {
     const candidate = remaining.shift();
@@ -386,10 +497,15 @@ function consumeQueuedDirection(
       break;
     }
 
-    if (!areOppositeDirections(currentDirection, candidate)) {
+    if (typeof candidate.sequence === "number") {
+      acknowledgedSequence = candidate.sequence;
+    }
+
+    if (!areOppositeDirections(currentDirection, candidate.direction)) {
       return {
-        direction: candidate,
+        direction: candidate.direction,
         remaining,
+        acknowledgedSequence,
       };
     }
   }
@@ -397,6 +513,7 @@ function consumeQueuedDirection(
   return {
     direction: currentDirection,
     remaining,
+    acknowledgedSequence,
   };
 }
 
@@ -625,6 +742,25 @@ function spawnFood(game: Pick<GameState, "config" | "snakes">, random: RandomFn)
   return freeCells[index] ?? null;
 }
 
+function spawnFoodFromSeed(
+  game: Pick<GameState, "config" | "snakes">,
+  seed: number,
+  randomOverride?: RandomFn,
+): { food: GridPosition | null; nextSeed: number } {
+  if (randomOverride) {
+    return {
+      food: spawnFood(game, randomOverride),
+      nextSeed: seed,
+    };
+  }
+
+  const sampled = sampleSeededRandom(seed);
+  return {
+    food: spawnFood(game, () => sampled.value),
+    nextSeed: sampled.seed,
+  };
+}
+
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -645,25 +781,52 @@ function toCellKey(position: GridPosition): string {
 function setInputBuffer(
   inputBuffers: InputBuffers,
   snakeId: SnakeId,
-  nextBuffer: readonly Direction[],
+  nextBuffer: readonly QueuedDirectionInput[],
 ): InputBuffers {
   if (snakeId === "player1") {
     return {
-      player1: [...nextBuffer],
-      player2: [...inputBuffers.player2],
+      player1: nextBuffer.map(cloneQueuedInput),
+      player2: inputBuffers.player2.map(cloneQueuedInput),
     };
   }
 
   return {
-    player1: [...inputBuffers.player1],
-    player2: [...nextBuffer],
+    player1: inputBuffers.player1.map(cloneQueuedInput),
+    player2: nextBuffer.map(cloneQueuedInput),
   };
 }
 
 function cloneInputBuffers(inputBuffers: InputBuffers): InputBuffers {
   return {
-    player1: [...inputBuffers.player1],
-    player2: [...inputBuffers.player2],
+    player1: inputBuffers.player1.map(cloneQueuedInput),
+    player2: inputBuffers.player2.map(cloneQueuedInput),
+  };
+}
+
+function setProcessedInputSequence(
+  processedInputSequences: ProcessedInputSequences,
+  snakeId: SnakeId,
+  sequence: number,
+): ProcessedInputSequences {
+  if (snakeId === "player1") {
+    return {
+      player1: sequence,
+      player2: processedInputSequences.player2,
+    };
+  }
+
+  return {
+    player1: processedInputSequences.player1,
+    player2: sequence,
+  };
+}
+
+function cloneProcessedInputSequences(
+  processedInputSequences: ProcessedInputSequences,
+): ProcessedInputSequences {
+  return {
+    player1: processedInputSequences.player1,
+    player2: processedInputSequences.player2,
   };
 }
 
@@ -672,15 +835,9 @@ function cloneRuntime(runtime: EngineRuntime): EngineRuntime {
     tick: runtime.tick,
     game: cloneGameState(runtime.game),
     inputBuffers: cloneInputBuffers(runtime.inputBuffers),
-    lastTickEvent: runtime.lastTickEvent
-      ? {
-          tick: runtime.lastTickEvent.tick,
-          consumedFoodPosition: runtime.lastTickEvent.consumedFoodPosition
-            ? clonePosition(runtime.lastTickEvent.consumedFoodPosition)
-            : null,
-          eliminatedSnakeIds: [...runtime.lastTickEvent.eliminatedSnakeIds],
-        }
-      : null,
+    processedInputSequences: cloneProcessedInputSequences(runtime.processedInputSequences),
+    rngSeed: runtime.rngSeed,
+    lastTickEvent: runtime.lastTickEvent ? cloneTickEvent(runtime.lastTickEvent) : null,
   };
 }
 
@@ -712,6 +869,80 @@ function clonePosition(position: GridPosition): GridPosition {
   return {
     x: position.x,
     y: position.y,
+  };
+}
+
+function cloneTickEvent(tickEvent: TickEvent): TickEvent {
+  return {
+    tick: tickEvent.tick,
+    consumedFoodPosition: tickEvent.consumedFoodPosition
+      ? clonePosition(tickEvent.consumedFoodPosition)
+      : null,
+    eliminatedSnakeIds: [...tickEvent.eliminatedSnakeIds],
+    processedInputSequences: cloneProcessedInputSequences(tickEvent.processedInputSequences),
+  };
+}
+
+function cloneQueuedInput(input: QueuedDirectionInput): QueuedDirectionInput {
+  return typeof input.sequence === "number"
+    ? {
+        direction: input.direction,
+        sequence: input.sequence,
+      }
+    : {
+        direction: input.direction,
+      };
+}
+
+function normalizeQueuedInput(input: unknown): QueuedDirectionInput | null {
+  if (isDirection(input)) {
+    return { direction: input };
+  }
+
+  if (typeof input !== "object" || input === null) {
+    return null;
+  }
+
+  const direction = "direction" in input ? input.direction : null;
+  if (!isDirection(direction)) {
+    return null;
+  }
+
+  const sequence = "sequence" in input ? input.sequence : undefined;
+  if (sequence !== undefined && !isValidInputSequence(sequence)) {
+    return null;
+  }
+
+  return typeof sequence === "number" ? { direction, sequence } : { direction };
+}
+
+function isValidInputSequence(sequence: unknown): sequence is number {
+  return Number.isInteger(sequence) && typeof sequence === "number" && sequence > 0;
+}
+
+function resolveSeed(options: CreateRuntimeOptions): number {
+  if (typeof options.seed === "number") {
+    return normalizeSeed(options.seed);
+  }
+
+  const sampled = clampUnit((options.random ?? Math.random)());
+  return normalizeSeed(Math.floor(sampled * (RNG_MODULUS - 1)) + 1);
+}
+
+function normalizeSeed(seed: number | undefined): number {
+  if (seed === undefined || !Number.isFinite(seed)) {
+    return DEFAULT_RNG_SEED;
+  }
+
+  const normalized = Math.floor(seed) >>> 0;
+  return normalized === 0 ? DEFAULT_RNG_SEED : normalized;
+}
+
+function sampleSeededRandom(seed: number): { seed: number; value: number } {
+  const nextSeed = (Math.imul(normalizeSeed(seed), RNG_MULTIPLIER) + RNG_INCREMENT) >>> 0;
+  return {
+    seed: nextSeed === 0 ? DEFAULT_RNG_SEED : nextSeed,
+    value: nextSeed / RNG_MODULUS,
   };
 }
 

@@ -35,7 +35,7 @@ export interface GameState {
 export const DEFAULT_GAME_CONFIG: Readonly<GameConfig> = Object.freeze({
   width: 20,
   height: 20,
-  tickRateMs: 140,
+  tickRateMs: 100,
 });
 
 export const PLAYER_IDS: readonly SnakeId[] = ["player1", "player2"];

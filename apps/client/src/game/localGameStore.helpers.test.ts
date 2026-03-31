@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   computeTransition,
   createSessionSummary,
+  estimateSnakeHeadCorrection,
   toSessionSummary,
+  toNetworkQuality,
+  toProcessedInputSequences,
+  toRngSeed,
   toSharedGameState,
   toTickEvent,
 } from "./localGameStore.helpers.js";
@@ -22,6 +26,10 @@ describe("computeTransition", () => {
       tick: 7,
       consumedFoodPosition: { x: 5, y: 5 },
       eliminatedSnakeIds: ["player2"],
+      processedInputSequences: {
+        player1: 0,
+        player2: 0,
+      },
     };
 
     const transition = computeTransition(previous, next, 7, tickEvent);
@@ -29,6 +37,7 @@ describe("computeTransition", () => {
     expect(transition.tick).toBe(7);
     expect(transition.foodEatenAt).toEqual({ x: 5, y: 5 });
     expect(transition.fatalCollision).toBe(true);
+    expect(transition.durationMs).toBe(next.config.tickRateMs);
   });
 
   it("infers food pickup from score delta when there is no tick event", () => {
@@ -82,14 +91,20 @@ describe("toTickEvent", () => {
         tick: 11,
         lastEventTick: 11,
         hasConsumedFoodEvent: true,
-        consumedFoodPosition: { x: 6, y: 2 },
-        player1EliminatedThisTick: true,
-        player2EliminatedThisTick: false,
-      }),
+      consumedFoodPosition: { x: 6, y: 2 },
+      player1EliminatedThisTick: true,
+      player2EliminatedThisTick: false,
+      player1ProcessedInputSequence: 9,
+      player2ProcessedInputSequence: 4,
+    }),
     ).toEqual({
       tick: 11,
       consumedFoodPosition: { x: 6, y: 2 },
       eliminatedSnakeIds: ["player1"],
+      processedInputSequences: {
+        player1: 9,
+        player2: 4,
+      },
     });
   });
 });
@@ -196,6 +211,58 @@ describe("session summary helpers", () => {
 
   it("falls back to an empty session when the payload is invalid", () => {
     expect(toSessionSummary({ roundNumber: "oops" })).toEqual(createSessionSummary());
+  });
+});
+
+describe("network helpers", () => {
+  it("normalizes processed input sequences and rng seed", () => {
+    expect(
+      toProcessedInputSequences({
+        player1ProcessedInputSequence: 12,
+        player2ProcessedInputSequence: 5,
+      }),
+    ).toEqual({
+      player1: 12,
+      player2: 5,
+    });
+
+    expect(toRngSeed({ rngSeed: 77 })).toBe(77);
+    expect(toRngSeed({ rngSeed: 0 })).toBe(1);
+  });
+
+  it("estimates wrapped correction distance on the controlled snake head", () => {
+    const previous = createGameState({
+      snakes: [
+        createSnake("player1", {
+          body: [
+            { x: 19, y: 2 },
+            { x: 18, y: 2 },
+          ],
+        }),
+        createSnake("player2"),
+      ],
+    });
+    const next = createGameState({
+      snakes: [
+        createSnake("player1", {
+          body: [
+            { x: 0, y: 2 },
+            { x: 19, y: 2 },
+          ],
+        }),
+        createSnake("player2"),
+      ],
+    });
+
+    expect(estimateSnakeHeadCorrection(previous, next, "player1")).toBe(1);
+  });
+
+  it("maps latency and jitter bands to a stable network quality label", () => {
+    expect(toNetworkQuality(null, null)).toBe("unknown");
+    expect(toNetworkQuality(30, 4)).toBe("excellent");
+    expect(toNetworkQuality(70, 11)).toBe("good");
+    expect(toNetworkQuality(110, 22)).toBe("fair");
+    expect(toNetworkQuality(160, 40)).toBe("poor");
   });
 });
 

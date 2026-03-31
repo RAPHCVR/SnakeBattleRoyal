@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   advanceRuntimeTick,
   createEmptyInputBuffers,
+  createEmptyProcessedInputSequences,
   createInitialGameState,
   createRuntime,
+  createRuntimeFromGameState,
   queueInput,
   type EngineRuntime,
   type InputBuffers,
@@ -13,7 +15,7 @@ import type { GameConfig, GameState, SnakeState } from "./game-types.js";
 const BASE_CONFIG: GameConfig = {
   width: 20,
   height: 20,
-  tickRateMs: 140,
+  tickRateMs: 100,
 };
 
 describe("shared snake engine", () => {
@@ -62,25 +64,51 @@ describe("shared snake engine", () => {
       initialStatus: "running",
     });
 
-    const first = queueInput(runtime, "player1", "up", { maxBufferSize: 3 });
+    const first = queueInput(runtime, "player1", { direction: "up", sequence: 1 }, { maxBufferSize: 3 });
     runtime = first.runtime;
     expect(first.accepted).toBe(true);
+    expect(first.reason).toBeNull();
 
-    const opposite = queueInput(runtime, "player1", "down", { maxBufferSize: 3 });
+    const opposite = queueInput(runtime, "player1", { direction: "down", sequence: 2 }, { maxBufferSize: 3 });
     runtime = opposite.runtime;
     expect(opposite.accepted).toBe(false);
+    expect(opposite.reason).toBe("invalid_direction_change");
 
-    const second = queueInput(runtime, "player1", "right", { maxBufferSize: 3 });
+    const second = queueInput(runtime, "player1", { direction: "right", sequence: 3 }, { maxBufferSize: 3 });
     runtime = second.runtime;
     expect(second.accepted).toBe(true);
 
     runtime = advanceRuntimeTick(runtime, () => 0.5);
     const player1AfterTick1 = runtime.game.snakes.find((snake) => snake.id === "player1");
     expect(player1AfterTick1?.direction).toBe("up");
+    expect(runtime.processedInputSequences.player1).toBe(1);
 
     runtime = advanceRuntimeTick(runtime, () => 0.5);
     const player1AfterTick2 = runtime.game.snakes.find((snake) => snake.id === "player1");
     expect(player1AfterTick2?.direction).toBe("right");
+    expect(runtime.processedInputSequences.player1).toBe(3);
+  });
+
+  it("rebuilds a runtime from an authoritative snapshot", () => {
+    const game = makeRunningState();
+
+    const runtime = createRuntimeFromGameState(game, {
+      tick: 9,
+      processedInputSequences: {
+        player1: 4,
+        player2: 3,
+      },
+      rngSeed: 12345,
+    });
+
+    expect(runtime.tick).toBe(9);
+    expect(runtime.game).toEqual(game);
+    expect(runtime.processedInputSequences).toEqual({
+      player1: 4,
+      player2: 3,
+    });
+    expect(runtime.rngSeed).toBe(12345);
+    expect(runtime.lastTickEvent).toBeNull();
   });
 
   it("applies wrap-around when crossing grid border", () => {
@@ -272,6 +300,7 @@ describe("shared snake engine", () => {
     expect(occupied.has(`${next.game.food?.x},${next.game.food?.y}`)).toBe(false);
     expect(next.lastTickEvent?.consumedFoodPosition).toEqual({ x: 3, y: 2 });
     expect(next.lastTickEvent?.eliminatedSnakeIds).toEqual([]);
+    expect(next.lastTickEvent?.processedInputSequences).toEqual(createEmptyProcessedInputSequences());
   });
 
   it("publishes eliminated snakes in the tick event", () => {
@@ -296,10 +325,33 @@ describe("shared snake engine", () => {
     expect(next.lastTickEvent?.tick).toBe(1);
     expect(next.lastTickEvent?.consumedFoodPosition).toBeNull();
     expect(next.lastTickEvent?.eliminatedSnakeIds).toEqual(["player1", "player2"]);
+    expect(next.lastTickEvent?.processedInputSequences).toEqual(createEmptyProcessedInputSequences());
+  });
+
+  it("carries the highest processed input sequence into the tick event", () => {
+    let runtime = createRuntime({
+      config: BASE_CONFIG,
+      initialStatus: "running",
+      seed: 9,
+    });
+
+    runtime = queueInput(runtime, "player1", { direction: "up", sequence: 6 }).runtime;
+    runtime = queueInput(runtime, "player2", { direction: "down", sequence: 3 }).runtime;
+
+    const next = advanceRuntimeTick(runtime);
+
+    expect(next.processedInputSequences).toEqual({
+      player1: 6,
+      player2: 3,
+    });
+    expect(next.lastTickEvent?.processedInputSequences).toEqual({
+      player1: 6,
+      player2: 3,
+    });
   });
 });
 
-function makeRunningState(overrides: Partial<GameState>): GameState {
+function makeRunningState(overrides: Partial<GameState> = {}): GameState {
   return {
     status: "running",
     config: BASE_CONFIG,
@@ -341,6 +393,8 @@ function runtimeFromGameState(game: GameState, inputBuffers?: InputBuffers): Eng
     tick: 0,
     game,
     inputBuffers: inputBuffers ?? createEmptyInputBuffers(),
+    processedInputSequences: createEmptyProcessedInputSequences(),
+    rngSeed: 1,
     lastTickEvent: null,
   };
 }

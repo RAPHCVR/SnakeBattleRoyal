@@ -4,6 +4,7 @@ import {
   SnakeGameEngine,
   isDirection,
   type Direction,
+  type QueueInputRejectReason,
   type SnakeId,
   type TickEvent,
   type Winner,
@@ -16,6 +17,24 @@ import {
 
 interface InputMessage {
   readonly direction: Direction;
+  readonly sequence?: number;
+}
+
+interface InputFeedbackMessage {
+  readonly sequence: number;
+  readonly accepted: boolean;
+  readonly reason: QueueInputRejectReason | null;
+}
+
+interface PingMessage {
+  readonly nonce?: number;
+  readonly clientSentAtMs?: number;
+}
+
+interface PongMessage {
+  readonly nonce: number;
+  readonly clientSentAtMs: number;
+  readonly serverReceivedAtMs: number;
 }
 
 const PLAYER_IDS: readonly SnakeId[] = ["player1", "player2"];
@@ -40,6 +59,8 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   private emptyRoomTimeout: ReturnType<typeof setTimeout> | null = null;
 
   public override onCreate(): void {
+    this.patchRate = DEFAULT_GAME_CONFIG.tickRateMs;
+
     this.setMetadata({
       gameMode: "snake_duel",
       tickRateMs: DEFAULT_GAME_CONFIG.tickRateMs,
@@ -66,11 +87,40 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       if (!slot) {
         return;
       }
-      if (!payload || !isDirection(payload.direction)) {
+
+      const direction = payload?.direction;
+      const sequence = toPositiveInteger(payload?.sequence);
+      if (!payload || !isDirection(direction)) {
+        if (typeof sequence === "number") {
+          client.send("input_feedback", {
+            sequence,
+            accepted: false,
+            reason: "invalid_direction",
+          } satisfies InputFeedbackMessage);
+        }
         return;
       }
 
-      this.engine.enqueueInput(slot, payload.direction);
+      const result = this.engine.enqueueInputWithResult(
+        slot,
+        typeof sequence === "number" ? { direction, sequence } : direction,
+      );
+
+      if (typeof sequence === "number") {
+        client.send("input_feedback", {
+          sequence,
+          accepted: result.accepted,
+          reason: result.reason,
+        } satisfies InputFeedbackMessage);
+      }
+    });
+
+    this.onMessage<PingMessage>("ping", (client, payload) => {
+      client.send("pong", {
+        nonce: toPositiveInteger(payload?.nonce) ?? 0,
+        clientSentAtMs: toFiniteNumber(payload?.clientSentAtMs),
+        serverReceivedAtMs: Date.now(),
+      } satisfies PongMessage);
     });
 
     this.onMessage("rematch", (client) => {
@@ -161,12 +211,17 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   }
 
   private pushEngineState(tickEvent: TickEvent | null = null): void {
+    const runtime = this.engine.getRuntime();
     applyGameStateToSchema(
       this.state,
-      this.engine.getState(),
-      this.engine.getTick(),
+      runtime.game,
+      runtime.tick,
       tickEvent,
       this.session,
+      {
+        processedInputSequences: runtime.processedInputSequences,
+        rngSeed: runtime.rngSeed,
+      },
     );
     this.state.connectedPlayers = this.clients.length;
     this.syncRematchVotes();
@@ -292,4 +347,12 @@ function isSamePosition(
   }
 
   return a.x === b.x && a.y === b.y;
+}
+
+function toPositiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function toFiniteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

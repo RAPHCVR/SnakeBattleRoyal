@@ -122,6 +122,35 @@ describe("App component states", () => {
     expect(screen.getAllByText("Room en attente")).not.toHaveLength(0);
     expect(screen.getByText(/En attente d'un adversaire/i)).toBeInTheDocument();
   });
+
+  it("exposes compact network telemetry during online play", () => {
+    mocks.storeState = createStoreState({
+      mode: "online",
+      gameState: createGameState("running"),
+      online: {
+        ownSnakeId: "player1",
+        roomId: "ABCD",
+        roomStatus: "running",
+        network: {
+          latencyMs: 38,
+          jitterMs: 7,
+          quality: "excellent",
+          pendingInputs: 1,
+          lastSentSequence: 4,
+          lastProcessedSequence: 3,
+          correctionCount: 0,
+          lastCorrectionDistance: 0,
+          predictionLeadTicks: 1,
+        },
+      },
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("Ping 38ms")).toBeInTheDocument();
+    expect(screen.getByText("Jitter 7ms")).toBeInTheDocument();
+    expect(screen.getByText("Queue 1")).toBeInTheDocument();
+  });
 });
 
 function createStoreState(
@@ -151,6 +180,19 @@ function createStoreState(
       rematchVoted: false,
       waitingOpponentRematch: false,
       lastError: null,
+      authoritativeTick: 0,
+      displayTick: 0,
+      network: {
+        latencyMs: null,
+        jitterMs: null,
+        quality: "unknown",
+        pendingInputs: 0,
+        lastSentSequence: 0,
+        lastProcessedSequence: 0,
+        correctionCount: 0,
+        lastCorrectionDistance: 0,
+        predictionLeadTicks: 0,
+      },
       ...(overrides.online ?? {}),
     },
     startLocalGame: vi.fn(),

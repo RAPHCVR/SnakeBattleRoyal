@@ -1,10 +1,22 @@
 import { ArraySchema, Schema, type } from "@colyseus/schema";
-import type { GameState, GridPosition, SnakeState, TickEvent } from "@snake-duel/shared";
+import {
+  createEmptyProcessedInputSequences,
+  type GameState,
+  type GridPosition,
+  type ProcessedInputSequences,
+  type SnakeState,
+  type TickEvent,
+} from "@snake-duel/shared";
 
 export interface RoundSessionState {
   readonly roundNumber: number;
   readonly player1Wins: number;
   readonly player2Wins: number;
+}
+
+export interface RoomRuntimeState {
+  readonly processedInputSequences: ProcessedInputSequences;
+  readonly rngSeed: number;
 }
 
 export class GridPositionSchema extends Schema {
@@ -26,8 +38,9 @@ export class SnakeRoomState extends Schema {
 
   @type("number") public width = 20;
   @type("number") public height = 20;
-  @type("number") public tickRateMs = 140;
+  @type("number") public tickRateMs = 100;
   @type("number") public tick = 0;
+  @type("number") public rngSeed = 1;
 
   @type([SnakeSchema]) public snakes = new ArraySchema<SnakeSchema>();
 
@@ -39,6 +52,8 @@ export class SnakeRoomState extends Schema {
   @type("boolean") public hasConsumedFoodEvent = false;
   @type("boolean") public player1EliminatedThisTick = false;
   @type("boolean") public player2EliminatedThisTick = false;
+  @type("number") public player1ProcessedInputSequence = 0;
+  @type("number") public player2ProcessedInputSequence = 0;
 
   @type("number") public connectedPlayers = 0;
   @type("boolean") public player1Rematch = false;
@@ -54,6 +69,10 @@ export function applyGameStateToSchema(
   tick: number,
   tickEvent: TickEvent | null = null,
   session: RoundSessionState = { roundNumber: 0, player1Wins: 0, player2Wins: 0 },
+  runtime: RoomRuntimeState = {
+    processedInputSequences: createEmptyProcessedInputSequences(),
+    rngSeed: 1,
+  },
 ): void {
   state.status = game.status;
   state.winner = game.winner ?? "";
@@ -61,10 +80,12 @@ export function applyGameStateToSchema(
   state.height = game.config.height;
   state.tickRateMs = game.config.tickRateMs;
   state.tick = tick;
+  state.rngSeed = runtime.rngSeed;
 
   syncSnakeArray(state.snakes, game.snakes);
   syncFood(state, game.food);
   syncTickEvent(state, tickEvent);
+  syncRuntimeState(state, runtime);
   syncSession(state, session);
 }
 
@@ -153,6 +174,12 @@ function syncTickEvent(state: SnakeRoomState, tickEvent: TickEvent | null): void
   const eliminated = new Set(tickEvent.eliminatedSnakeIds);
   state.player1EliminatedThisTick = eliminated.has("player1");
   state.player2EliminatedThisTick = eliminated.has("player2");
+}
+
+function syncRuntimeState(state: SnakeRoomState, runtime: RoomRuntimeState): void {
+  state.rngSeed = runtime.rngSeed;
+  state.player1ProcessedInputSequence = runtime.processedInputSequences.player1;
+  state.player2ProcessedInputSequence = runtime.processedInputSequences.player2;
 }
 
 function syncSession(state: SnakeRoomState, session: RoundSessionState): void {

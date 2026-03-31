@@ -3,17 +3,29 @@ import { WebSocketTransport } from "@colyseus/sdk/transport/WebSocketTransport";
 import {
   DEFAULT_GAME_CONFIG,
   SnakeGameEngine,
+  advanceRuntimeTick,
+  createEmptyProcessedInputSequences,
+  createRuntimeFromGameState,
+  queueInput,
   type Direction,
+  type EngineRuntime,
   type GameState,
+  type ProcessedInputSequences,
+  type QueueInputRejectReason,
   type SnakeId,
 } from "@snake-duel/shared";
 import { create } from "zustand";
 import {
   computeTransition,
   createSessionSummary,
+  estimateSnakeHeadCorrection,
+  toNetworkQuality,
+  toProcessedInputSequences,
+  toRngSeed,
   toSessionSummary,
   toSharedGameState,
   toTickEvent,
+  type NetworkQuality,
   type SessionSummary,
   type TickTransition,
 } from "./localGameStore.helpers.js";
@@ -27,6 +39,18 @@ interface RematchVotes {
   readonly player2: boolean;
 }
 
+interface OnlineNetworkState {
+  readonly latencyMs: number | null;
+  readonly jitterMs: number | null;
+  readonly quality: NetworkQuality;
+  readonly pendingInputs: number;
+  readonly lastSentSequence: number;
+  readonly lastProcessedSequence: number;
+  readonly correctionCount: number;
+  readonly lastCorrectionDistance: number;
+  readonly predictionLeadTicks: number;
+}
+
 interface OnlineSessionState {
   readonly connecting: boolean;
   readonly roomId: string | null;
@@ -38,6 +62,9 @@ interface OnlineSessionState {
   readonly rematchVoted: boolean;
   readonly waitingOpponentRematch: boolean;
   readonly lastError: string | null;
+  readonly authoritativeTick: number;
+  readonly displayTick: number;
+  readonly network: OnlineNetworkState;
 }
 
 interface LocalGameStoreState {
@@ -64,6 +91,13 @@ const engine = new SnakeGameEngine({
 });
 
 const COLYSEUS_URL = import.meta.env.VITE_COLYSEUS_URL ?? "ws://localhost:2567";
+const ONLINE_INPUT_BUFFER_SIZE = 3;
+const ONLINE_PING_INTERVAL_MS = 2_000;
+const ONLINE_LATENCY_EWMA_ALPHA = 0.25;
+const ONLINE_JITTER_EWMA_ALPHA = 0.2;
+const ONLINE_PREDICTION_BUFFER_MS = 6;
+const ONLINE_MIN_PREDICTION_DELAY_MS = 12;
+const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
 
 let localLoopHandle: number | null = null;
 let onlineClient: Client | null = null;
@@ -73,6 +107,22 @@ let transitionTimeoutHandle: number | null = null;
 let browserTransportPatched = false;
 let localManualTimeControl = false;
 let localManualTimeRemainderMs = 0;
+let onlinePredictionTimeoutHandle: number | null = null;
+let onlinePingIntervalHandle: number | null = null;
+let onlinePredictionRuntime: EngineRuntime | null = null;
+let onlineAuthoritativeState: GameState | null = null;
+let onlineAuthoritativeTick = 0;
+let onlineAuthoritativeProcessedInputs: ProcessedInputSequences = createEmptyProcessedInputSequences();
+let onlineAuthoritativeRngSeed = 1;
+let onlinePendingInputs: PendingOnlineInput[] = [];
+let onlineNextInputSequence = 1;
+let onlinePingNonce = 1;
+let onlineOutstandingPings = new Map<number, number>();
+let onlineLatencyMs: number | null = null;
+let onlineJitterMs: number | null = null;
+let onlineLastRttSampleMs: number | null = null;
+let onlineCorrectionCount = 0;
+let onlineLastCorrectionDistance = 0;
 
 type StoreSetState = (recipe: (state: LocalGameStoreState) => Partial<LocalGameStoreState>) => void;
 type StoreGetState = () => LocalGameStoreState;
@@ -91,6 +141,40 @@ interface BrowserWebSocketTransportShape {
   };
 }
 
+interface PendingOnlineInput {
+  readonly sequence: number;
+  readonly direction: Direction;
+}
+
+interface InputFeedbackMessage {
+  readonly sequence?: number;
+  readonly accepted?: boolean;
+  readonly reason?: QueueInputRejectReason | null;
+}
+
+interface PongMessage {
+  readonly nonce?: number;
+  readonly clientSentAtMs?: number;
+  readonly serverReceivedAtMs?: number;
+}
+
+function createOnlineNetworkState(
+  override: Partial<OnlineNetworkState> = {},
+): OnlineNetworkState {
+  return {
+    latencyMs: null,
+    jitterMs: null,
+    quality: "unknown",
+    pendingInputs: 0,
+    lastSentSequence: 0,
+    lastProcessedSequence: 0,
+    correctionCount: 0,
+    lastCorrectionDistance: 0,
+    predictionLeadTicks: 0,
+    ...override,
+  };
+}
+
 function createOnlineSessionState(
   override: Partial<OnlineSessionState> = {},
 ): OnlineSessionState {
@@ -105,6 +189,9 @@ function createOnlineSessionState(
     rematchVoted: false,
     waitingOpponentRematch: false,
     lastError: null,
+    authoritativeTick: 0,
+    displayTick: 0,
+    network: createOnlineNetworkState(),
     ...override,
   };
 }
@@ -205,7 +292,46 @@ function ensureBrowserTransportPatch(): void {
   browserTransportPatched = true;
 }
 
+function stopOnlinePredictionLoop(): void {
+  if (onlinePredictionTimeoutHandle === null) {
+    return;
+  }
+
+  window.clearTimeout(onlinePredictionTimeoutHandle);
+  onlinePredictionTimeoutHandle = null;
+}
+
+function stopOnlinePingLoop(): void {
+  if (onlinePingIntervalHandle !== null) {
+    window.clearInterval(onlinePingIntervalHandle);
+    onlinePingIntervalHandle = null;
+  }
+
+  onlineOutstandingPings.clear();
+}
+
+function resetOnlineRuntimeState(): void {
+  stopOnlinePredictionLoop();
+  stopOnlinePingLoop();
+  onlinePredictionRuntime = null;
+  onlineAuthoritativeState = null;
+  onlineAuthoritativeTick = 0;
+  onlineAuthoritativeProcessedInputs = createEmptyProcessedInputSequences();
+  onlineAuthoritativeRngSeed = 1;
+  onlinePendingInputs = [];
+  onlineNextInputSequence = 1;
+  onlinePingNonce = 1;
+  onlineLatencyMs = null;
+  onlineJitterMs = null;
+  onlineLastRttSampleMs = null;
+  onlineCorrectionCount = 0;
+  onlineLastCorrectionDistance = 0;
+}
+
 function stopOnlineRoom(consented: boolean): void {
+  stopOnlinePredictionLoop();
+  stopOnlinePingLoop();
+
   if (!onlineRoom) {
     return;
   }
@@ -238,7 +364,219 @@ function scheduleTransitionClear(
       };
     });
     transitionTimeoutHandle = null;
-  }, transition.next.config.tickRateMs);
+  }, transition.durationMs);
+}
+
+function updateOnlineNetworkMetrics(sampleRttMs: number): void {
+  if (!Number.isFinite(sampleRttMs) || sampleRttMs < 0) {
+    return;
+  }
+
+  if (onlineLatencyMs === null) {
+    onlineLatencyMs = sampleRttMs;
+  } else {
+    onlineLatencyMs += (sampleRttMs - onlineLatencyMs) * ONLINE_LATENCY_EWMA_ALPHA;
+  }
+
+  const jitterSample = onlineLastRttSampleMs === null ? 0 : Math.abs(sampleRttMs - onlineLastRttSampleMs);
+  if (onlineJitterMs === null) {
+    onlineJitterMs = jitterSample;
+  } else {
+    onlineJitterMs += (jitterSample - onlineJitterMs) * ONLINE_JITTER_EWMA_ALPHA;
+  }
+
+  onlineLastRttSampleMs = sampleRttMs;
+}
+
+function getEstimatedOneWayDelayMs(tickRateMs: number): number {
+  if (onlineLatencyMs !== null) {
+    return Math.max(0, Math.round(onlineLatencyMs / 2));
+  }
+
+  return Math.round(tickRateMs * 0.45);
+}
+
+function computePredictionDelayMs(tickRateMs: number): number {
+  const estimatedDelay = tickRateMs - getEstimatedOneWayDelayMs(tickRateMs) - ONLINE_PREDICTION_BUFFER_MS;
+  return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, estimatedDelay));
+}
+
+function getOwnProcessedSequence(
+  ownSnakeId: SnakeId | null,
+  processedInputs: ProcessedInputSequences,
+): number {
+  if (ownSnakeId === "player1") {
+    return processedInputs.player1;
+  }
+
+  if (ownSnakeId === "player2") {
+    return processedInputs.player2;
+  }
+
+  return 0;
+}
+
+function getPredictionLeadTicks(displayTick: number, authoritativeTick: number): number {
+  return Math.max(0, displayTick - authoritativeTick);
+}
+
+function getOnlineNetworkSnapshot(
+  ownSnakeId: SnakeId | null,
+  displayTick: number,
+  authoritativeTick: number,
+): OnlineNetworkState {
+  const roundedLatency = onlineLatencyMs === null ? null : Math.round(onlineLatencyMs);
+  const roundedJitter = onlineJitterMs === null ? null : Math.round(onlineJitterMs);
+
+  return createOnlineNetworkState({
+    latencyMs: roundedLatency,
+    jitterMs: roundedJitter,
+    quality: toNetworkQuality(roundedLatency, roundedJitter),
+    pendingInputs: onlinePendingInputs.length,
+    lastSentSequence: Math.max(0, onlineNextInputSequence - 1),
+    lastProcessedSequence: getOwnProcessedSequence(ownSnakeId, onlineAuthoritativeProcessedInputs),
+    correctionCount: onlineCorrectionCount,
+    lastCorrectionDistance: onlineLastCorrectionDistance,
+    predictionLeadTicks: getPredictionLeadTicks(displayTick, authoritativeTick),
+  });
+}
+
+function rebuildOnlinePredictionRuntime(ownSnakeId: SnakeId | null): EngineRuntime | null {
+  if (!onlineAuthoritativeState) {
+    return null;
+  }
+
+  let runtime = createRuntimeFromGameState(onlineAuthoritativeState, {
+    tick: onlineAuthoritativeTick,
+    processedInputSequences: onlineAuthoritativeProcessedInputs,
+    rngSeed: onlineAuthoritativeRngSeed,
+  });
+
+  if (!ownSnakeId) {
+    onlinePendingInputs = [];
+    return runtime;
+  }
+
+  const acknowledgedSequence = getOwnProcessedSequence(ownSnakeId, onlineAuthoritativeProcessedInputs);
+  const replayableInputs: PendingOnlineInput[] = [];
+
+  for (const pendingInput of onlinePendingInputs) {
+    if (pendingInput.sequence <= acknowledgedSequence) {
+      continue;
+    }
+
+    const result = queueInput(
+      runtime,
+      ownSnakeId,
+      { direction: pendingInput.direction, sequence: pendingInput.sequence },
+      { maxBufferSize: ONLINE_INPUT_BUFFER_SIZE },
+    );
+
+    runtime = result.runtime;
+    if (result.accepted) {
+      replayableInputs.push(pendingInput);
+    }
+  }
+
+  onlinePendingInputs = replayableInputs;
+  return runtime;
+}
+
+function scheduleOnlinePredictionStep(
+  setState: StoreSetState,
+  stepDelayMs: number,
+): void {
+  stopOnlinePredictionLoop();
+
+  const state = storeGetState?.();
+  if (!state || state.mode !== "online" || state.gameState.status !== "running") {
+    return;
+  }
+
+  if (!onlinePredictionRuntime) {
+    return;
+  }
+
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + ONLINE_MAX_PREDICTION_LEAD_TICKS) {
+    return;
+  }
+
+  onlinePredictionTimeoutHandle = window.setTimeout(() => {
+    onlinePredictionTimeoutHandle = null;
+    const advanced = runOnlinePredictionStep(setState, stepDelayMs);
+    if (!advanced) {
+      return;
+    }
+
+    const tickRateMs = onlinePredictionRuntime?.game.config.tickRateMs ?? DEFAULT_GAME_CONFIG.tickRateMs;
+    scheduleOnlinePredictionStep(setState, tickRateMs);
+  }, stepDelayMs);
+}
+
+function runOnlinePredictionStep(
+  setState: StoreSetState,
+  durationMs: number,
+): boolean {
+  const state = storeGetState?.();
+  if (!state || state.mode !== "online" || state.gameState.status !== "running") {
+    return false;
+  }
+
+  if (!onlinePredictionRuntime) {
+    return false;
+  }
+
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + ONLINE_MAX_PREDICTION_LEAD_TICKS) {
+    return false;
+  }
+
+  const previousRuntime = onlinePredictionRuntime;
+  const nextRuntime = advanceRuntimeTick(previousRuntime);
+  if (nextRuntime.tick === previousRuntime.tick) {
+    return false;
+  }
+
+  onlinePredictionRuntime = nextRuntime;
+  const transition = computeTransition(
+    state.gameState,
+    nextRuntime.game,
+    nextRuntime.tick,
+    nextRuntime.lastTickEvent,
+    durationMs,
+  );
+
+  setState((store) => ({
+    ...store,
+    gameState: nextRuntime.game,
+    transition,
+    renderVersion: store.renderVersion + 1,
+    online: createOnlineSessionState({
+      ...store.online,
+      displayTick: nextRuntime.tick,
+      network: getOnlineNetworkSnapshot(store.online.ownSnakeId, nextRuntime.tick, store.online.authoritativeTick),
+    }),
+  }));
+  scheduleTransitionClear(setState, transition);
+  return true;
+}
+
+function startOnlinePingLoop(): void {
+  stopOnlinePingLoop();
+
+  const room = onlineRoom;
+  if (!room) {
+    return;
+  }
+
+  const sendPing = () => {
+    const nonce = onlinePingNonce++;
+    const clientSentAtMs = performance.now();
+    onlineOutstandingPings.set(nonce, clientSentAtMs);
+    room.send("ping", { nonce, clientSentAtMs });
+  };
+
+  sendPing();
+  onlinePingIntervalHandle = window.setInterval(sendPing, ONLINE_PING_INTERVAL_MS);
 }
 
 function runLocalSimulationStep(setState: StoreSetState): boolean {
@@ -334,6 +672,7 @@ async function startOnlineMatchmaking(
   resetLocalManualTimeControl();
   stopTickLoop();
   stopOnlineRoom(true);
+  resetOnlineRuntimeState();
   clearTransitionTimer();
 
   const generation = ++matchmakingGeneration;
@@ -369,6 +708,11 @@ async function startOnlineMatchmaking(
         return;
       }
 
+      const rebuiltRuntime = rebuildOnlinePredictionRuntime(seat);
+      if (rebuiltRuntime) {
+        onlinePredictionRuntime = rebuiltRuntime;
+      }
+
       setState((state) => ({
         ...state,
         online: createOnlineSessionState({
@@ -379,22 +723,117 @@ async function startOnlineMatchmaking(
           connectedPlayers: Math.max(state.online.connectedPlayers, 1),
           rematchVoted: seat === "player1" ? state.online.rematchVotes.player1 : state.online.rematchVotes.player2,
           waitingOpponentRematch: false,
+          network: getOnlineNetworkSnapshot(seat, state.online.displayTick, state.online.authoritativeTick),
+        }),
+      }));
+    });
+
+    room.onMessage<InputFeedbackMessage>("input_feedback", (payload) => {
+      const sequence = toFiniteNumber(payload?.sequence, 0);
+      if (sequence < 1 || payload?.accepted !== false) {
+        return;
+      }
+
+      onlinePendingInputs = onlinePendingInputs.filter((pendingInput) => pendingInput.sequence !== sequence);
+      const ownSnakeId = useLocalGameStore.getState().online.ownSnakeId;
+      const rebuiltRuntime = rebuildOnlinePredictionRuntime(ownSnakeId);
+      if (rebuiltRuntime) {
+        onlinePredictionRuntime = rebuiltRuntime;
+      }
+
+      setState((state) => ({
+        ...state,
+        online: createOnlineSessionState({
+          ...state.online,
+          network: getOnlineNetworkSnapshot(
+            state.online.ownSnakeId,
+            state.online.displayTick,
+            state.online.authoritativeTick,
+          ),
+        }),
+      }));
+    });
+
+    room.onMessage<PongMessage>("pong", (payload) => {
+      const nonce = toFiniteNumber(payload?.nonce, 0);
+      if (nonce < 1) {
+        return;
+      }
+
+      const sentAt = onlineOutstandingPings.get(nonce);
+      if (sentAt === undefined) {
+        return;
+      }
+
+      onlineOutstandingPings.delete(nonce);
+      updateOnlineNetworkMetrics(Math.max(0, performance.now() - sentAt));
+
+      setState((state) => ({
+        ...state,
+        online: createOnlineSessionState({
+          ...state.online,
+          network: getOnlineNetworkSnapshot(
+            state.online.ownSnakeId,
+            state.online.displayTick,
+            state.online.authoritativeTick,
+          ),
         }),
       }));
     });
 
     room.onStateChange((networkState) => {
-      const previousGame = useLocalGameStore.getState().gameState;
+      const currentStore = useLocalGameStore.getState();
+      const previousGame = currentStore.gameState;
+      const previousDisplayTick = currentStore.online.displayTick;
       const nextGame = toSharedGameState(networkState);
       const tick = toFiniteNumber((networkState as AnyRecord).tick, 0);
       const tickEvent = toTickEvent(networkState);
-      const transition = computeTransition(previousGame, nextGame, tick, tickEvent);
+      const processedInputs = toProcessedInputSequences(networkState);
+      const rngSeed = toRngSeed(networkState);
       const connectedPlayers = toFiniteNumber((networkState as AnyRecord).connectedPlayers, 0);
       const waitingForOpponent = nextGame.status === "waiting" && connectedPlayers < 2;
       const rematchVotes = {
         player1: toBoolean((networkState as AnyRecord).player1Rematch, false),
         player2: toBoolean((networkState as AnyRecord).player2Rematch, false),
       };
+
+      onlineAuthoritativeState = nextGame;
+      onlineAuthoritativeTick = tick;
+      onlineAuthoritativeProcessedInputs = processedInputs;
+      onlineAuthoritativeRngSeed = rngSeed;
+
+      const rebuiltRuntime = rebuildOnlinePredictionRuntime(currentStore.online.ownSnakeId);
+      const runtime =
+        rebuiltRuntime ??
+        createRuntimeFromGameState(nextGame, {
+          tick,
+          processedInputSequences: processedInputs,
+          rngSeed,
+        });
+
+      onlinePredictionRuntime = runtime;
+
+      const correctionActive =
+        Boolean(currentStore.online.ownSnakeId) && previousDisplayTick >= tick;
+      const correctionDistance =
+        currentStore.online.ownSnakeId && correctionActive
+          ? estimateSnakeHeadCorrection(previousGame, runtime.game, currentStore.online.ownSnakeId)
+          : 0;
+
+      onlineLastCorrectionDistance = correctionDistance;
+      if (correctionDistance > 0 && correctionActive) {
+        onlineCorrectionCount += 1;
+      }
+
+      const transition = computeTransition(
+        previousGame,
+        runtime.game,
+        runtime.tick,
+        tickEvent,
+        correctionDistance > 0 && correctionActive
+          ? Math.max(48, Math.min(nextGame.config.tickRateMs, Math.round(nextGame.config.tickRateMs * 0.6)))
+          : nextGame.config.tickRateMs,
+      );
 
       setState((state) => {
         const ownId = state.online.ownSnakeId;
@@ -411,7 +850,7 @@ async function startOnlineMatchmaking(
         return {
           ...state,
           mode: "online",
-          gameState: nextGame,
+          gameState: runtime.game,
           transition,
           renderVersion: state.renderVersion + 1,
           session: toSessionSummary(networkState),
@@ -426,10 +865,19 @@ async function startOnlineMatchmaking(
             rematchVoted,
             waitingOpponentRematch,
             lastError: null,
+            authoritativeTick: tick,
+            displayTick: runtime.tick,
+            network: getOnlineNetworkSnapshot(ownId, runtime.tick, tick),
           }),
         };
       });
       scheduleTransitionClear(setState, transition);
+
+      if (nextGame.status === "running") {
+        scheduleOnlinePredictionStep(setState, computePredictionDelayMs(nextGame.config.tickRateMs));
+      } else {
+        stopOnlinePredictionLoop();
+      }
     });
 
     room.onLeave((code, reason) => {
@@ -438,6 +886,7 @@ async function startOnlineMatchmaking(
       }
 
       onlineRoom = null;
+      resetOnlineRuntimeState();
       clearTransitionTimer();
       setState((state) => ({
         ...state,
@@ -459,6 +908,7 @@ async function startOnlineMatchmaking(
 
       onlineRoom = null;
       room.removeAllListeners();
+      resetOnlineRuntimeState();
       clearTransitionTimer();
       setState((state) => ({
         ...state,
@@ -474,12 +924,15 @@ async function startOnlineMatchmaking(
         renderVersion: state.renderVersion + 1,
       }));
     });
+
+    startOnlinePingLoop();
   } catch (error) {
     if (generation !== matchmakingGeneration) {
       return;
     }
 
     const message = error instanceof Error ? error.message : "Connexion matchmaking impossible.";
+    resetOnlineRuntimeState();
     clearTransitionTimer();
     setState((state) => ({
       ...state,
@@ -509,6 +962,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       resetLocalManualTimeControl();
       matchmakingGeneration += 1;
       stopOnlineRoom(true);
+      resetOnlineRuntimeState();
       clearTransitionTimer();
       const next = engine.reset("running");
       set((state) => ({
@@ -543,6 +997,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       resetLocalManualTimeControl();
       matchmakingGeneration += 1;
       stopOnlineRoom(true);
+      resetOnlineRuntimeState();
       clearTransitionTimer();
       const waiting = engine.reset("waiting");
       set((state) => ({
@@ -568,6 +1023,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       matchmakingGeneration += 1;
       stopTickLoop();
       stopOnlineRoom(true);
+      resetOnlineRuntimeState();
       clearTransitionTimer();
       const waiting = engine.reset("waiting");
       set((state) => ({
@@ -589,11 +1045,59 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
     },
     enqueueOnlineInput: (direction) => {
       const state = get();
-      if (state.mode !== "online" || state.gameState.status !== "running" || !onlineRoom) {
+      const ownSnakeId = state.online.ownSnakeId;
+      if (
+        state.mode !== "online" ||
+        state.gameState.status !== "running" ||
+        !onlineRoom ||
+        !ownSnakeId
+      ) {
         return false;
       }
 
-      onlineRoom.send("input", { direction });
+      const sequence = onlineNextInputSequence;
+      const baseRuntime =
+        onlinePredictionRuntime ??
+        rebuildOnlinePredictionRuntime(ownSnakeId) ??
+        (onlineAuthoritativeState
+          ? createRuntimeFromGameState(onlineAuthoritativeState, {
+              tick: onlineAuthoritativeTick,
+              processedInputSequences: onlineAuthoritativeProcessedInputs,
+              rngSeed: onlineAuthoritativeRngSeed,
+            })
+          : null);
+
+      if (!baseRuntime) {
+        return false;
+      }
+
+      const result = queueInput(
+        baseRuntime,
+        ownSnakeId,
+        { direction, sequence },
+        { maxBufferSize: ONLINE_INPUT_BUFFER_SIZE },
+      );
+
+      if (!result.accepted) {
+        return false;
+      }
+
+      onlinePredictionRuntime = result.runtime;
+      onlinePendingInputs = [...onlinePendingInputs, { sequence, direction }];
+      onlineNextInputSequence += 1;
+      onlineRoom.send("input", { direction, sequence });
+
+      set((store) => ({
+        ...store,
+        online: createOnlineSessionState({
+          ...store.online,
+          network: getOnlineNetworkSnapshot(
+            store.online.ownSnakeId,
+            store.online.displayTick,
+            store.online.authoritativeTick,
+          ),
+        }),
+      }));
       return true;
     },
     togglePause: () => {
@@ -624,6 +1128,7 @@ export function destroyLocalGameLoop(): void {
   resetLocalManualTimeControl();
   stopTickLoop();
   stopOnlineRoom(true);
+  resetOnlineRuntimeState();
   clearTransitionTimer();
 }
 
@@ -656,6 +1161,9 @@ function renderGameToText(): string {
       connectedPlayers: state.online.connectedPlayers,
       waitingForOpponent: state.online.waitingForOpponent,
       waitingOpponentRematch: state.online.waitingOpponentRematch,
+      authoritativeTick: state.online.authoritativeTick,
+      displayTick: state.online.displayTick,
+      network: state.online.network,
     },
     automation: {
       manualTimeControl: localManualTimeControl,
