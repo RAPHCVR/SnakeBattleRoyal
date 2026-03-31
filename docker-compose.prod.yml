@@ -1,0 +1,35 @@
+name: snake-duel-prod
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: snake-duel-server
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 2567
+    ports:
+      - "127.0.0.1:${SERVER_HOST_PORT:-2567}:2567"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2567/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  client:
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile
+      args:
+        VITE_COLYSEUS_URL: ${VITE_COLYSEUS_URL:-wss://apisnake.raphcvr.me}
+    container_name: snake-duel-client
+    ports:
+      - "127.0.0.1:${CLIENT_HOST_PORT:-5173}:80"
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy

@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+.git
+.turbo
+.tmp
+.runlogs
+test-results
+coverage
+**/coverage
+dist
+**/dist
+**/.env.local
+**/.env.local.*
+*.log
+npm-debug.log*

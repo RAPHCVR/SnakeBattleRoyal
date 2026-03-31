@@ -1,0 +1,28 @@
+name: prod-monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+jobs:
+  public-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Check public health
+        run: npm run health:public
+        env:
+          PUBLIC_BASE_URL: https://snake.raphcvr.me
+          PUBLIC_WS_URL: wss://apisnake.raphcvr.me

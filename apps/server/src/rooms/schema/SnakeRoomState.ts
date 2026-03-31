@@ -1,0 +1,153 @@
+import { ArraySchema, Schema, type } from "@colyseus/schema";
+import type { GameState, GridPosition, SnakeState, TickEvent } from "@snake-duel/shared";
+
+export class GridPositionSchema extends Schema {
+  @type("number") public x = 0;
+  @type("number") public y = 0;
+}
+
+export class SnakeSchema extends Schema {
+  @type("string") public id = "";
+  @type("string") public direction = "right";
+  @type("boolean") public alive = true;
+  @type("number") public score = 0;
+  @type([GridPositionSchema]) public body = new ArraySchema<GridPositionSchema>();
+}
+
+export class SnakeRoomState extends Schema {
+  @type("string") public status = "waiting";
+  @type("string") public winner = "";
+
+  @type("number") public width = 20;
+  @type("number") public height = 20;
+  @type("number") public tickRateMs = 140;
+  @type("number") public tick = 0;
+
+  @type([SnakeSchema]) public snakes = new ArraySchema<SnakeSchema>();
+
+  @type(GridPositionSchema) public food = new GridPositionSchema();
+  @type("boolean") public hasFood = false;
+
+  @type("number") public lastEventTick = 0;
+  @type(GridPositionSchema) public consumedFoodPosition = new GridPositionSchema();
+  @type("boolean") public hasConsumedFoodEvent = false;
+  @type("boolean") public player1EliminatedThisTick = false;
+  @type("boolean") public player2EliminatedThisTick = false;
+
+  @type("number") public connectedPlayers = 0;
+  @type("boolean") public player1Rematch = false;
+  @type("boolean") public player2Rematch = false;
+}
+
+export function applyGameStateToSchema(
+  state: SnakeRoomState,
+  game: GameState,
+  tick: number,
+  tickEvent: TickEvent | null = null,
+): void {
+  state.status = game.status;
+  state.winner = game.winner ?? "";
+  state.width = game.config.width;
+  state.height = game.config.height;
+  state.tickRateMs = game.config.tickRateMs;
+  state.tick = tick;
+
+  syncSnakeArray(state.snakes, game.snakes);
+  syncFood(state, game.food);
+  syncTickEvent(state, tickEvent);
+}
+
+function syncSnakeArray(target: ArraySchema<SnakeSchema>, next: readonly SnakeState[]): void {
+  while (target.length > next.length) {
+    target.pop();
+  }
+
+  for (let index = 0; index < next.length; index += 1) {
+    const nextSnake = next[index];
+    if (!nextSnake) {
+      continue;
+    }
+
+    const existing = target[index];
+    const snakeSchema = existing ?? createSnakeSchema();
+    if (!existing) {
+      target.push(snakeSchema);
+    }
+
+    snakeSchema.id = nextSnake.id;
+    snakeSchema.direction = nextSnake.direction;
+    snakeSchema.alive = nextSnake.alive;
+    snakeSchema.score = nextSnake.score;
+    syncBody(snakeSchema.body, nextSnake.body);
+  }
+}
+
+function syncBody(target: ArraySchema<GridPositionSchema>, next: readonly GridPosition[]): void {
+  while (target.length > next.length) {
+    target.pop();
+  }
+
+  for (let index = 0; index < next.length; index += 1) {
+    const nextSegment = next[index];
+    if (!nextSegment) {
+      continue;
+    }
+
+    const existing = target[index];
+    const segmentSchema = existing ?? createGridPositionSchema();
+    if (!existing) {
+      target.push(segmentSchema);
+    }
+
+    segmentSchema.x = nextSegment.x;
+    segmentSchema.y = nextSegment.y;
+  }
+}
+
+function syncFood(state: SnakeRoomState, food: GridPosition | null): void {
+  if (!food) {
+    state.hasFood = false;
+    state.food.x = 0;
+    state.food.y = 0;
+    return;
+  }
+
+  state.hasFood = true;
+  state.food.x = food.x;
+  state.food.y = food.y;
+}
+
+function syncTickEvent(state: SnakeRoomState, tickEvent: TickEvent | null): void {
+  if (!tickEvent) {
+    state.lastEventTick = 0;
+    state.hasConsumedFoodEvent = false;
+    state.consumedFoodPosition.x = 0;
+    state.consumedFoodPosition.y = 0;
+    state.player1EliminatedThisTick = false;
+    state.player2EliminatedThisTick = false;
+    return;
+  }
+
+  state.lastEventTick = tickEvent.tick;
+  if (tickEvent.consumedFoodPosition) {
+    state.hasConsumedFoodEvent = true;
+    state.consumedFoodPosition.x = tickEvent.consumedFoodPosition.x;
+    state.consumedFoodPosition.y = tickEvent.consumedFoodPosition.y;
+  } else {
+    state.hasConsumedFoodEvent = false;
+    state.consumedFoodPosition.x = 0;
+    state.consumedFoodPosition.y = 0;
+  }
+
+  const eliminated = new Set(tickEvent.eliminatedSnakeIds);
+  state.player1EliminatedThisTick = eliminated.has("player1");
+  state.player2EliminatedThisTick = eliminated.has("player2");
+}
+
+function createSnakeSchema(): SnakeSchema {
+  return new SnakeSchema();
+}
+
+function createGridPositionSchema(): GridPositionSchema {
+  return new GridPositionSchema();
+}
