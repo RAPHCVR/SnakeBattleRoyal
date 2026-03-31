@@ -33,6 +33,7 @@ export function App() {
   const mode = useLocalGameStore((state) => state.mode);
   const gameState = useLocalGameStore((state) => state.gameState);
   const transition = useLocalGameStore((state) => state.transition);
+  const session = useLocalGameStore((state) => state.session);
   const online = useLocalGameStore((state) => state.online);
 
   const startLocalGame = useLocalGameStore((state) => state.startLocalGame);
@@ -71,7 +72,8 @@ export function App() {
   const floatingTouchOnline = touchMode === "online" && !touchOnlineFocusMode;
   const mobileMenu = coarsePointer && isMenu;
   const compactTopPanel = Boolean(touchMode) || mobileMenu || desktopGameMode;
-  const showHeader = !splitTouchLocal && !touchOnlineFocusMode;
+  const showHeader = !splitTouchLocal && !touchOnlineFocusMode && !(Boolean(touchMode) && !isMenu);
+  const showTouchArenaSummary = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchOnlineFocusMode;
   const shouldLockBodyScroll = Boolean(touchMode);
   const arenaSizeClass =
     touchOnlineFocusMode
@@ -79,9 +81,9 @@ export function App() {
       : splitTouchLocal
       ? "h-[min(67svh,16.5rem)] min-h-[12.5rem] sm:h-[min(70svh,18.5rem)]"
       : floatingTouchLocal
-        ? "h-[min(31svh,14rem)] min-h-[10.75rem] sm:h-[min(34svh,15rem)] sm:min-h-[11.75rem]"
+        ? "h-[min(37svh,16rem)] min-h-[11.5rem] sm:h-[min(41svh,17.5rem)] sm:min-h-[12.5rem]"
       : touchMode === "online"
-        ? "h-[min(38svh,17rem)] min-h-[12.5rem] sm:h-[min(44svh,19rem)] sm:min-h-[14rem]"
+        ? "h-[min(42svh,17.5rem)] min-h-[12.5rem] sm:h-[min(46svh,19rem)] sm:min-h-[13.5rem]"
       : desktopGameMode
         ? "h-[min(calc(100svh-14rem),40rem)] min-h-[23rem] xl:h-[min(calc(100svh-13rem),44rem)]"
       : mobileMenu
@@ -119,7 +121,45 @@ export function App() {
           ? "Mode tactile online."
           : toControlLabel(mode);
   const shouldRenderFooter =
-    !splitTouchLocal && !touchMode && !touchOnlineFocusMode && !mobileMenu && !desktopGameMode;
+    !isMenu && !splitTouchLocal && !touchMode && !touchOnlineFocusMode && !mobileMenu && !desktopGameMode;
+  const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
+  const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
+  const phaseLabel = isMenu
+    ? "Menu"
+    : isMatchmaking
+      ? "Matchmaking"
+      : isOnline
+        ? showOnlineWaiting
+          ? "Room en attente"
+          : "Online"
+        : isLocal
+          ? "Local"
+          : "Arena";
+  const headerTitle = isMenu
+    ? "Duel local ou online"
+    : isMatchmaking
+      ? "Recherche d'adversaire"
+      : showOnlineWaiting
+        ? "Room en attente"
+        : roundLabel
+          ? `${roundLabel} en cours`
+          : "Snake Duel Arena";
+  const headerSubtitle = isMenu
+    ? "Arena en wrap, inputs bufferises et rematchs synchronises pour des duels plus lisibles."
+    : isMatchmaking
+      ? "Connexion au matchmaking Colyseus en cours."
+      : isOnline
+        ? roomStatusLabel
+        : paused
+          ? "Pause locale. Reprenez la manche quand vous voulez."
+          : `Session ${sessionScoreLabel}`;
+  const touchSummaryLabel = showOnlineWaiting
+    ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
+    : isOnline
+      ? online.ownSnakeId?.toUpperCase() ?? "ONLINE"
+      : paused
+        ? "PAUSE"
+        : "RUN";
   const desktopHeaderActionLabel =
     desktopGameMode
       ? isLocal && gameState.status !== "game_over"
@@ -227,15 +267,30 @@ export function App() {
                   compactTopPanel ? "text-xl sm:text-2xl" : "text-2xl sm:text-3xl"
                 }`}
               >
-                Local & Online Authoritative
+                {headerTitle}
               </h1>
               <p
                 className={`mt-1 text-slate-300 ${
                   compactTopPanel ? "text-[11px] sm:text-xs" : "text-xs sm:text-sm"
                 }`}
               >
-                {roomStatusLabel}
+                {headerSubtitle}
               </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <InfoChip label={phaseLabel} accent="teal" />
+                {roundLabel ? <InfoChip label={roundLabel} /> : null}
+                {!isMenu ? <InfoChip label={`Session ${sessionScoreLabel}`} accent="orange" /> : null}
+                {isOnline && online.ownSnakeId ? (
+                  <InfoChip label={online.ownSnakeId.toUpperCase()} />
+                ) : null}
+                {isMenu ? (
+                  <>
+                    <InfoChip label="Wrap arena" />
+                    <InfoChip label="Buffer x3" />
+                    <InfoChip label="Clavier + tactile" />
+                  </>
+                ) : null}
+              </div>
               {desktopGameMode ? (
                 <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-slate-300/88 sm:text-xs">
                   {controlsLabel}
@@ -243,26 +298,49 @@ export function App() {
               ) : null}
             </div>
             <div className="flex flex-col items-end gap-2">
-              <div
-                className={`grid grid-cols-2 gap-2 ${
-                  compactTopPanel ? "text-[11px]" : "text-xs sm:text-sm"
-                }`}
-              >
-                <StatCard
-                  title="Player 1"
-                  value={`${player1?.score ?? 0} pts`}
-                  detail={`Longueur ${player1?.body.length ?? 0}`}
-                  accent="teal"
-                  compact={compactTopPanel}
-                />
-                <StatCard
-                  title="Player 2"
-                  value={`${player2?.score ?? 0} pts`}
-                  detail={`Longueur ${player2?.body.length ?? 0}`}
-                  accent="orange"
-                  compact={compactTopPanel}
-                />
-              </div>
+              {isMenu && mobileMenu ? null : (
+                <div
+                  className={`grid grid-cols-2 gap-2 ${
+                    compactTopPanel ? "text-[11px]" : "text-xs sm:text-sm"
+                  }`}
+                >
+                  {isMenu ? (
+                    <>
+                      <StatCard
+                        title="Local"
+                        value="Instantane"
+                        detail="2 joueurs, clavier et tactile"
+                        accent="teal"
+                        compact={compactTopPanel}
+                      />
+                      <StatCard
+                        title="Online"
+                        value="Autoritaire"
+                        detail="Matchmaking, room sync et rematch"
+                        accent="orange"
+                        compact={compactTopPanel}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <StatCard
+                        title="J1"
+                        value={`${session.player1Wins} manche${session.player1Wins > 1 ? "s" : ""}`}
+                        detail={`${player1?.score ?? 0} pts • L${player1?.body.length ?? 0}`}
+                        accent="teal"
+                        compact={compactTopPanel}
+                      />
+                      <StatCard
+                        title="J2"
+                        value={`${session.player2Wins} manche${session.player2Wins > 1 ? "s" : ""}`}
+                        detail={`${player2?.score ?? 0} pts • L${player2?.body.length ?? 0}`}
+                        accent="orange"
+                        compact={compactTopPanel}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
               {desktopHeaderActionLabel ? (
                 <button
                   type="button"
@@ -292,6 +370,28 @@ export function App() {
               desktopGameMode ? "flex items-center justify-center" : ""
             }`}
           >
+            {showTouchArenaSummary ? (
+              <div className="arena-summary">
+                <div className="arena-summary__chips">
+                  <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
+                  {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
+                  <InfoChip label={touchSummaryLabel} compact />
+                </div>
+                <div className="arena-summary__scores">
+                  <CompactArenaScore
+                    title="J1"
+                    value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
+                    accent="teal"
+                  />
+                  <CompactArenaScore
+                    title="J2"
+                    value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
+                    accent="orange"
+                  />
+                </div>
+              </div>
+            ) : null}
+
             <div className={desktopGameMode ? "h-full aspect-square max-w-full" : "h-full w-full"}>
               {shouldRenderPhaser ? (
                 <Suspense
@@ -315,6 +415,7 @@ export function App() {
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16, ease: "easeOut" }}
                   className="overlay-panel"
                 >
                   <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Duel prêt</h2>
@@ -355,6 +456,7 @@ export function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <div className="loader-orbit" />
@@ -376,6 +478,7 @@ export function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <div className="loader-orbit" />
@@ -402,6 +505,7 @@ export function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <p className="text-sm uppercase tracking-[0.25em] text-slate-300">Pause</p>
@@ -419,17 +523,21 @@ export function App() {
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <p className="text-xs uppercase tracking-[0.25em] text-slate-300">Game Over</p>
                   <h3 className="mt-2 text-2xl font-black tracking-tight">
                     {toWinnerLabel(gameState.winner)}
                   </h3>
+                  <p className="mt-2 text-center text-xs text-slate-300">
+                    {roundLabel ? `${roundLabel} terminee` : "Manche terminee"} • Session {sessionScoreLabel}
+                  </p>
 
                   <div className="mt-5 flex flex-wrap justify-center gap-3">
                     {isLocal ? (
                       <button type="button" className="btn-primary" onClick={restartLocalGame}>
-                        Rejouer
+                        Manche suivante
                       </button>
                     ) : (
                       <button
@@ -438,7 +546,7 @@ export function App() {
                         onClick={voteRematch}
                         disabled={online.rematchVoted}
                       >
-                        {online.rematchVoted ? "Vote envoyé" : "Voter Rematch"}
+                        {online.rematchVoted ? "Vote envoye" : "Voter manche suivante"}
                       </button>
                     )}
 
@@ -513,6 +621,46 @@ export function App() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+interface InfoChipProps {
+  readonly label: string;
+  readonly accent?: "teal" | "orange" | "slate";
+  readonly compact?: boolean;
+}
+
+function InfoChip({ label, accent = "slate", compact = false }: InfoChipProps) {
+  const palette =
+    accent === "teal"
+      ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-50"
+      : accent === "orange"
+        ? "border-orange-400/28 bg-orange-400/10 text-orange-50"
+        : "border-slate-500/40 bg-slate-800/60 text-slate-200";
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-3 py-1 font-semibold uppercase tracking-[0.18em] ${palette} ${
+        compact ? "text-[9px]" : "text-[10px]"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+interface CompactArenaScoreProps {
+  readonly title: string;
+  readonly value: string;
+  readonly accent: "teal" | "orange";
+}
+
+function CompactArenaScore({ title, value, accent }: CompactArenaScoreProps) {
+  return (
+    <div className={`arena-score-pill arena-score-pill--${accent}`}>
+      <span className="arena-score-pill__title">{title}</span>
+      <span className="arena-score-pill__value">{value}</span>
+    </div>
   );
 }
 

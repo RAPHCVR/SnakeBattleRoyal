@@ -472,7 +472,11 @@ async function runWebkitOnlineScenario() {
   const combinedErrors = [...issues1.pageErrors, ...issues2.pageErrors];
   const combinedFailures = [...issues1.requestFailures, ...issues2.requestFailures];
 
-  pushAssertion("webkit online joins a room", /Room /i.test(bodyText) && /Vous:/i.test(bodyText), bodyText);
+  pushAssertion(
+    "webkit online exposes round and seat context",
+    /MANCHE 1/i.test(bodyText) && /PLAYER1|PLAYER2/i.test(bodyText),
+    bodyText,
+  );
   pushAssertion("webkit online has no page errors", combinedErrors.length === 0, combinedErrors);
   pushAssertion("webkit online has no request failures", combinedFailures.length === 0, combinedFailures);
   pushAssertion("webkit online touch dock fits viewport", !snapshot.touchDock?.outOfViewport, snapshot.touchDock);
@@ -549,23 +553,34 @@ async function collectSnapshot(page) {
       };
     };
 
-    const buttons = Array.from(document.querySelectorAll("button")).map((button) => {
-      const rect = button.getBoundingClientRect();
-      return {
-        text: button.textContent?.trim() ?? "",
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        right: Math.round(rect.right),
-        bottom: Math.round(rect.bottom),
-        outOfViewport:
-          rect.x < -1 ||
-          rect.y < -1 ||
-          rect.right > window.innerWidth + 1 ||
-          rect.bottom > window.innerHeight + 1,
-      };
-    });
+    const buttons = Array.from(document.querySelectorAll("button"))
+      .map((button) => {
+        const rect = button.getBoundingClientRect();
+        const style = window.getComputedStyle(button);
+        const visible =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0.05;
+
+        return {
+          text: button.textContent?.trim() ?? "",
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          right: Math.round(rect.right),
+          bottom: Math.round(rect.bottom),
+          visible,
+          outOfViewport:
+            rect.x < -1 ||
+            rect.y < -1 ||
+            rect.right > window.innerWidth + 1 ||
+            rect.bottom > window.innerHeight + 1,
+        };
+      })
+      .filter((button) => button.visible);
 
     return {
       viewport: {

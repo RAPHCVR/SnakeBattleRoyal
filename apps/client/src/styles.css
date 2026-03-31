@@ -119,6 +119,67 @@ body {
   padding: 1.5rem;
 }
 
+.arena-summary {
+  position: absolute;
+  inset: 0.7rem 0.7rem auto;
+  z-index: 16;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  pointer-events: none;
+}
+
+.arena-summary__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: min(70%, 16rem);
+}
+
+.arena-summary__scores {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.arena-score-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 6.75rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(2, 6, 23, 0.78);
+  padding: 0.3rem 0.55rem;
+  line-height: 1.1;
+  box-shadow: 0 12px 22px rgba(2, 6, 23, 0.2);
+}
+
+.arena-score-pill--teal {
+  border-color: rgba(45, 212, 191, 0.32);
+  background: rgba(13, 148, 136, 0.16);
+}
+
+.arena-score-pill--orange {
+  border-color: rgba(251, 146, 60, 0.32);
+  background: rgba(194, 65, 12, 0.16);
+}
+
+.arena-score-pill__title {
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.arena-score-pill__value {
+  margin-top: 0.12rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgba(248, 250, 252, 0.96);
+}
+
 .arena-placeholder {
   position: relative;
   width: 100%;
@@ -147,6 +208,7 @@ body {
   border-radius: 999px;
   filter: blur(70px);
   opacity: 0.24;
+  animation: preview-glow 4.6s ease-in-out infinite;
 }
 
 .arena-placeholder__glow--teal {
@@ -179,6 +241,7 @@ body {
 .arena-placeholder__snake--player1 {
   top: 54%;
   left: 36%;
+  animation: preview-snake-player1 4.8s ease-in-out infinite alternate;
 }
 
 .arena-placeholder__snake--player1 span {
@@ -188,6 +251,7 @@ body {
 .arena-placeholder__snake--player2 {
   top: 54%;
   left: 57%;
+  animation: preview-snake-player2 5.1s ease-in-out infinite alternate;
 }
 
 .arena-placeholder__snake--player2 span {
@@ -203,6 +267,7 @@ body {
   border-radius: 999px;
   background: rgba(245, 158, 11, 0.96);
   box-shadow: 0 0 18px rgba(245, 158, 11, 0.52);
+  animation: preview-food 1.8s ease-in-out infinite;
 }
 
 .btn-primary,
@@ -827,11 +892,71 @@ body {
   }
 }
 
+@keyframes preview-glow {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.2;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 0.3;
+  }
+}
+
+@keyframes preview-food {
+  0%,
+  100% {
+    transform: scale(0.9);
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    transform: scale(1.16);
+    box-shadow: 0 0 22px rgba(245, 158, 11, 0.68);
+  }
+}
+
+@keyframes preview-snake-player1 {
+  0% {
+    transform: translate3d(-0.2rem, 0.15rem, 0);
+  }
+  100% {
+    transform: translate3d(0.35rem, -0.2rem, 0);
+  }
+}
+
+@keyframes preview-snake-player2 {
+  0% {
+    transform: translate3d(0.2rem, -0.1rem, 0);
+  }
+  100% {
+    transform: translate3d(-0.35rem, 0.2rem, 0);
+  }
+}
+
 @media (max-width: 639px) {
   .overlay-panel,
   .overlay-subpanel {
     inset: 0.8rem;
     padding: 1.1rem;
+  }
+
+  .arena-summary {
+    inset: 0.55rem 0.55rem auto;
+    gap: 0.45rem;
+  }
+
+  .arena-summary__chips {
+    max-width: min(64%, 11.5rem);
+  }
+
+  .arena-score-pill {
+    min-width: 5.35rem;
+    padding: 0.24rem 0.42rem;
+  }
+
+  .arena-score-pill__value {
+    font-size: 0.62rem;
   }
 
   .touch-dock__header {
@@ -874,6 +999,27 @@ body {
   }
 }
 
+@media (max-width: 420px) {
+  .arena-summary {
+    flex-direction: column;
+  }
+
+  .arena-summary__chips,
+  .arena-summary__scores {
+    width: 100%;
+    max-width: none;
+  }
+
+  .arena-summary__scores {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .arena-score-pill {
+    align-items: flex-start;
+    min-width: 0;
+  }
+}
+
 @media (max-width: 360px) {
   .app-shell--floating-local-dock {
     padding-bottom: 0.75rem;
@@ -912,29 +1058,29 @@ body {
   }
 
   .touch-dock__inner--floating-local {
-    padding: 0.45rem;
+    padding: 0.25rem;
   }
 
   .touch-dock__floating-header {
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.15rem;
   }
 
   .touch-dock__inner--floating-local .touch-dock__pads {
-    gap: 0.45rem;
+    gap: 0.25rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad {
     gap: 0.25rem;
-    padding: 0.35rem;
+    padding: 0.22rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__matrix {
-    min-height: min(31vw, 5.75rem);
-    gap: 0.25rem;
+    min-height: min(26vw, 4.8rem);
+    gap: 0.18rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__button {
-    min-height: 2rem;
+    min-height: 1.75rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__core-copy {
@@ -966,29 +1112,29 @@ body {
   }
 
   .touch-dock__inner--floating-local {
-    padding: 0.45rem;
+    padding: 0.25rem;
   }
 
   .touch-dock__floating-header {
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.15rem;
   }
 
   .touch-dock__inner--floating-local .touch-dock__pads {
-    gap: 0.45rem;
+    gap: 0.25rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad {
     gap: 0.25rem;
-    padding: 0.35rem;
+    padding: 0.22rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__matrix {
-    min-height: min(29vw, 5.75rem);
-    gap: 0.25rem;
+    min-height: min(26vw, 4.8rem);
+    gap: 0.18rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__button {
-    min-height: 2rem;
+    min-height: 1.75rem;
   }
 
   .touch-dock__inner--floating-local .touch-pad__core-copy {
@@ -1065,5 +1211,22 @@ body {
 
   .touch-side-controls .touch-pad__matrix {
     min-height: 6.9rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader-orbit,
+  .arena-placeholder__glow,
+  .arena-placeholder__snake--player1,
+  .arena-placeholder__snake--player2,
+  .arena-placeholder__food {
+    animation: none;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .touch-pill-button,
+  .touch-pad__button {
+    transition: none;
   }
 }

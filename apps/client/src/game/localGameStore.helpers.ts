@@ -17,7 +17,24 @@ export interface TickTransition {
   readonly fatalCollision: boolean;
 }
 
+export interface SessionSummary {
+  readonly roundNumber: number;
+  readonly player1Wins: number;
+  readonly player2Wins: number;
+}
+
 type AnyRecord = Record<string, unknown>;
+
+export function createSessionSummary(
+  override: Partial<SessionSummary> = {},
+): SessionSummary {
+  return {
+    roundNumber: 0,
+    player1Wins: 0,
+    player2Wins: 0,
+    ...override,
+  };
+}
 
 export function computeTransition(
   previous: GameState,
@@ -89,6 +106,16 @@ export function toTickEvent(networkState: unknown): TickEvent | null {
       : null,
     eliminatedSnakeIds,
   };
+}
+
+export function toSessionSummary(networkState: unknown): SessionSummary {
+  const data = isRecord(networkState) ? networkState : {};
+
+  return createSessionSummary({
+    roundNumber: toFiniteNumber(data.roundNumber, 0),
+    player1Wins: toFiniteNumber(data.player1Wins, 0),
+    player2Wins: toFiniteNumber(data.player2Wins, 0),
+  });
 }
 
 function hasAnyScoreIncrement(previous: GameState, next: GameState): boolean {

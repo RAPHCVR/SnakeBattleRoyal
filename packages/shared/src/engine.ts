@@ -253,8 +253,10 @@ export function advanceRuntimeTick(runtime: EngineRuntime, random: RandomFn = Ma
     };
   }
 
-  const eliminated = evaluateEliminations(runtime.game, plannedMoves);
-  const eatenBy = evaluateFoodEaten(runtime.game, plannedMoves, eliminated);
+  const growthCandidates = evaluateFoodIntent(runtime.game, plannedMoves);
+  const projectedBodies = buildProjectedBodies(runtime.game, plannedMoves, growthCandidates);
+  const eliminated = evaluateEliminations(runtime.game, plannedMoves, projectedBodies);
+  const eatenBy = filterGrowthCandidates(growthCandidates, eliminated);
   const nextSnakes = buildNextSnakes(runtime.game, plannedMoves, eliminated, eatenBy);
 
   const nextGameWithoutFood: GameState = {
@@ -401,27 +403,34 @@ function consumeQueuedDirection(
 function evaluateEliminations(
   game: GameState,
   plannedMoves: Partial<Record<SnakeId, PlannedMove>>,
+  projectedBodies: ReadonlyMap<SnakeId, readonly GridPosition[]>,
 ): Set<SnakeId> {
   const eliminated = new Set<SnakeId>();
-  const player1Move = plannedMoves.player1;
-  const player2Move = plannedMoves.player2;
+  const headOccupants = new Map<string, SnakeId[]>();
 
-  if (player1Move && player2Move) {
-    if (isSamePosition(player1Move.nextHead, player2Move.nextHead)) {
-      eliminated.add("player1");
-      eliminated.add("player2");
-    } else if (
-      isSamePosition(player1Move.nextHead, player2Move.previousHead) &&
-      isSamePosition(player2Move.nextHead, player1Move.previousHead)
-    ) {
-      eliminated.add("player1");
-      eliminated.add("player2");
-    } else if (
-      isSamePosition(player1Move.nextHead, player2Move.previousHead) ||
-      isSamePosition(player2Move.nextHead, player1Move.previousHead)
-    ) {
-      eliminated.add("player1");
-      eliminated.add("player2");
+  for (const snake of game.snakes) {
+    if (!snake.alive) {
+      continue;
+    }
+
+    const move = plannedMoves[snake.id];
+    if (!move) {
+      continue;
+    }
+
+    const cellKey = toCellKey(move.nextHead);
+    const occupants = headOccupants.get(cellKey) ?? [];
+    occupants.push(snake.id);
+    headOccupants.set(cellKey, occupants);
+  }
+
+  for (const occupants of headOccupants.values()) {
+    if (occupants.length < 2) {
+      continue;
+    }
+
+    for (const snakeId of occupants) {
+      eliminated.add(snakeId);
     }
   }
 
@@ -435,8 +444,10 @@ function evaluateEliminations(
       continue;
     }
 
-    if (containsPosition(snake.body.slice(1), move.nextHead)) {
+    const projectedSelf = projectedBodies.get(snake.id) ?? [];
+    if (containsPosition(projectedSelf.slice(1), move.nextHead)) {
       eliminated.add(snake.id);
+      continue;
     }
 
     for (const otherSnake of game.snakes) {
@@ -444,9 +455,10 @@ function evaluateEliminations(
         continue;
       }
 
-      const obstacleSegments = otherSnake.alive ? otherSnake.body.slice(1) : otherSnake.body;
-      if (containsPosition(obstacleSegments, move.nextHead)) {
+      const projectedOther = projectedBodies.get(otherSnake.id) ?? [];
+      if (containsPosition(projectedOther.slice(1), move.nextHead)) {
         eliminated.add(snake.id);
+        break;
       }
     }
   }
@@ -454,10 +466,9 @@ function evaluateEliminations(
   return eliminated;
 }
 
-function evaluateFoodEaten(
+function evaluateFoodIntent(
   game: GameState,
   plannedMoves: Partial<Record<SnakeId, PlannedMove>>,
-  eliminated: Set<SnakeId>,
 ): Set<SnakeId> {
   const eatenBy = new Set<SnakeId>();
   if (!game.food) {
@@ -465,7 +476,7 @@ function evaluateFoodEaten(
   }
 
   for (const snake of game.snakes) {
-    if (!snake.alive || eliminated.has(snake.id)) {
+    if (!snake.alive) {
       continue;
     }
 
@@ -480,6 +491,46 @@ function evaluateFoodEaten(
   }
 
   return eatenBy;
+}
+
+function buildProjectedBodies(
+  game: GameState,
+  plannedMoves: Partial<Record<SnakeId, PlannedMove>>,
+  growthCandidates: ReadonlySet<SnakeId>,
+): Map<SnakeId, readonly GridPosition[]> {
+  const projected = new Map<SnakeId, readonly GridPosition[]>();
+
+  for (const snake of game.snakes) {
+    if (!snake.alive) {
+      projected.set(snake.id, snake.body.map(clonePosition));
+      continue;
+    }
+
+    const move = plannedMoves[snake.id];
+    if (!move) {
+      projected.set(snake.id, snake.body.map(clonePosition));
+      continue;
+    }
+
+    const keepsTail = growthCandidates.has(snake.id);
+    const carriedBody = keepsTail ? snake.body : snake.body.slice(0, Math.max(snake.body.length - 1, 0));
+    projected.set(snake.id, [clonePosition(move.nextHead), ...carriedBody.map(clonePosition)]);
+  }
+
+  return projected;
+}
+
+function filterGrowthCandidates(
+  growthCandidates: ReadonlySet<SnakeId>,
+  eliminated: ReadonlySet<SnakeId>,
+): Set<SnakeId> {
+  const survivors = new Set<SnakeId>();
+  for (const snakeId of growthCandidates) {
+    if (!eliminated.has(snakeId)) {
+      survivors.add(snakeId);
+    }
+  }
+  return survivors;
 }
 
 function buildNextSnakes(

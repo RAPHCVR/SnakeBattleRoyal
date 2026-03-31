@@ -6,8 +6,13 @@ import {
   type Direction,
   type SnakeId,
   type TickEvent,
+  type Winner,
 } from "@snake-duel/shared";
-import { SnakeRoomState, applyGameStateToSchema } from "./schema/SnakeRoomState.js";
+import {
+  SnakeRoomState,
+  applyGameStateToSchema,
+  type RoundSessionState,
+} from "./schema/SnakeRoomState.js";
 
 interface InputMessage {
   readonly direction: Direction;
@@ -30,6 +35,8 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   private readonly sessionToPlayer = new Map<string, SnakeId>();
   private readonly occupiedSlots = new Set<SnakeId>();
   private readonly rematchVotes = new Set<SnakeId>();
+  private session: RoundSessionState = createRoundSessionState();
+  private roundResultRecorded = false;
   private emptyRoomTimeout: ReturnType<typeof setTimeout> | null = null;
 
   public override onCreate(): void {
@@ -45,6 +52,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       const before = this.engine.getTick();
       const beforeEvent = this.engine.getLastTickEvent();
       this.engine.tick();
+      this.recordRoundResultIfNeeded(this.engine.getState().winner);
       const after = this.engine.getTick();
       const afterEvent = this.engine.getLastTickEvent();
 
@@ -117,11 +125,13 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
 
     if (this.clients.length === 0) {
       this.scheduleEmptyRoomCleanup();
+      this.resetSession();
       this.engine.reset("waiting");
       this.pushEngineState();
       return;
     }
 
+    this.resetSession();
     this.engine.reset("waiting");
     this.pushEngineState();
     this.broadcast("system", {
@@ -137,6 +147,11 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   private startRunningMatch(): void {
     this.rematchVotes.clear();
     this.syncRematchVotes();
+    this.roundResultRecorded = false;
+    this.session = {
+      ...this.session,
+      roundNumber: this.session.roundNumber > 0 ? this.session.roundNumber + 1 : 1,
+    };
     this.engine.reset("running");
     this.pushEngineState();
     this.broadcast("system", {
@@ -151,6 +166,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       this.engine.getState(),
       this.engine.getTick(),
       tickEvent,
+      this.session,
     );
     this.state.connectedPlayers = this.clients.length;
     this.syncRematchVotes();
@@ -191,6 +207,39 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
     clearTimeout(this.emptyRoomTimeout);
     this.emptyRoomTimeout = null;
   }
+
+  private resetSession(): void {
+    this.session = createRoundSessionState();
+    this.roundResultRecorded = false;
+  }
+
+  private recordRoundResultIfNeeded(winner: Winner): void {
+    if (this.roundResultRecorded || this.engine.getState().status !== "game_over") {
+      return;
+    }
+
+    if (winner === "player1") {
+      this.session = {
+        ...this.session,
+        player1Wins: this.session.player1Wins + 1,
+      };
+    } else if (winner === "player2") {
+      this.session = {
+        ...this.session,
+        player2Wins: this.session.player2Wins + 1,
+      };
+    }
+
+    this.roundResultRecorded = true;
+  }
+}
+
+function createRoundSessionState(): RoundSessionState {
+  return {
+    roundNumber: 0,
+    player1Wins: 0,
+    player2Wins: 0,
+  };
 }
 
 export function shouldPushEngineStateUpdate(

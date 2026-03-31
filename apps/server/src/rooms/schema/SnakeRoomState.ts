@@ -1,6 +1,12 @@
 import { ArraySchema, Schema, type } from "@colyseus/schema";
 import type { GameState, GridPosition, SnakeState, TickEvent } from "@snake-duel/shared";
 
+export interface RoundSessionState {
+  readonly roundNumber: number;
+  readonly player1Wins: number;
+  readonly player2Wins: number;
+}
+
 export class GridPositionSchema extends Schema {
   @type("number") public x = 0;
   @type("number") public y = 0;
@@ -37,6 +43,9 @@ export class SnakeRoomState extends Schema {
   @type("number") public connectedPlayers = 0;
   @type("boolean") public player1Rematch = false;
   @type("boolean") public player2Rematch = false;
+  @type("number") public roundNumber = 0;
+  @type("number") public player1Wins = 0;
+  @type("number") public player2Wins = 0;
 }
 
 export function applyGameStateToSchema(
@@ -44,6 +53,7 @@ export function applyGameStateToSchema(
   game: GameState,
   tick: number,
   tickEvent: TickEvent | null = null,
+  session: RoundSessionState = { roundNumber: 0, player1Wins: 0, player2Wins: 0 },
 ): void {
   state.status = game.status;
   state.winner = game.winner ?? "";
@@ -55,6 +65,7 @@ export function applyGameStateToSchema(
   syncSnakeArray(state.snakes, game.snakes);
   syncFood(state, game.food);
   syncTickEvent(state, tickEvent);
+  syncSession(state, session);
 }
 
 function syncSnakeArray(target: ArraySchema<SnakeSchema>, next: readonly SnakeState[]): void {
@@ -142,6 +153,12 @@ function syncTickEvent(state: SnakeRoomState, tickEvent: TickEvent | null): void
   const eliminated = new Set(tickEvent.eliminatedSnakeIds);
   state.player1EliminatedThisTick = eliminated.has("player1");
   state.player2EliminatedThisTick = eliminated.has("player2");
+}
+
+function syncSession(state: SnakeRoomState, session: RoundSessionState): void {
+  state.roundNumber = session.roundNumber;
+  state.player1Wins = session.player1Wins;
+  state.player2Wins = session.player2Wins;
 }
 
 function createSnakeSchema(): SnakeSchema {

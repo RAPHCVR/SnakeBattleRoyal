@@ -154,7 +154,7 @@ describe("shared snake engine", () => {
     expect(next.game.winner).toBe("draw");
   });
 
-  it("eliminates both snakes on a lateral head impact through the opponent previous head cell", () => {
+  it("kills only the intruding snake when it enters the opponent previous head cell", () => {
     const runtime = runtimeFromGameState(
       makeRunningState({
         snakes: [
@@ -173,12 +173,16 @@ describe("shared snake engine", () => {
     );
 
     const next = advanceRuntimeTick(runtime, () => 0.6);
-    expect(next.game.snakes.every((snake) => !snake.alive)).toBe(true);
+    const player1 = next.game.snakes.find((snake) => snake.id === "player1");
+    const player2 = next.game.snakes.find((snake) => snake.id === "player2");
+
+    expect(player1?.alive).toBe(false);
+    expect(player2?.alive).toBe(true);
     expect(next.game.status).toBe("game_over");
-    expect(next.game.winner).toBe("draw");
+    expect(next.game.winner).toBe("player2");
   });
 
-  it("kills trailing snake when it catches opponent tail before it moves", () => {
+  it("allows a snake to enter a tail cell vacated on the same tick", () => {
     const runtime = runtimeFromGameState(
       makeRunningState({
         snakes: [
@@ -200,8 +204,39 @@ describe("shared snake engine", () => {
     const player1 = next.game.snakes.find((snake) => snake.id === "player1");
     const player2 = next.game.snakes.find((snake) => snake.id === "player2");
 
+    expect(player1?.alive).toBe(true);
+    expect(player2?.alive).toBe(true);
+    expect(player1?.body[0]).toEqual({ x: 3, y: 5 });
+    expect(next.game.status).toBe("running");
+    expect(next.game.winner).toBeNull();
+  });
+
+  it("still blocks access to a tail cell when the other snake grows and keeps that segment", () => {
+    const runtime = runtimeFromGameState(
+      makeRunningState({
+        snakes: [
+          makeSnake("player1", "right", true, [
+            { x: 2, y: 5 },
+            { x: 1, y: 5 },
+            { x: 0, y: 5 },
+          ]),
+          makeSnake("player2", "right", true, [
+            { x: 5, y: 5 },
+            { x: 4, y: 5 },
+            { x: 3, y: 5 },
+          ]),
+        ],
+        food: { x: 6, y: 5 },
+      }),
+    );
+
+    const next = advanceRuntimeTick(runtime, () => 0.2);
+    const player1 = next.game.snakes.find((snake) => snake.id === "player1");
+    const player2 = next.game.snakes.find((snake) => snake.id === "player2");
+
     expect(player1?.alive).toBe(false);
     expect(player2?.alive).toBe(true);
+    expect(player2?.score).toBe(1);
     expect(next.game.status).toBe("game_over");
     expect(next.game.winner).toBe("player2");
   });

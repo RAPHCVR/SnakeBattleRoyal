@@ -10,8 +10,11 @@ import {
 import { create } from "zustand";
 import {
   computeTransition,
+  createSessionSummary,
+  toSessionSummary,
   toSharedGameState,
   toTickEvent,
+  type SessionSummary,
   type TickTransition,
 } from "./localGameStore.helpers.js";
 
@@ -42,6 +45,7 @@ interface LocalGameStoreState {
   readonly gameState: GameState;
   readonly transition: TickTransition | null;
   readonly renderVersion: number;
+  readonly session: SessionSummary;
   readonly online: OnlineSessionState;
   startLocalGame: () => void;
   restartLocalGame: () => void;
@@ -103,6 +107,39 @@ function createOnlineSessionState(
     lastError: null,
     ...override,
   };
+}
+
+function createNewSession(): SessionSummary {
+  return createSessionSummary({ roundNumber: 1 });
+}
+
+function advanceSessionRound(session: SessionSummary): SessionSummary {
+  const currentRound = session.roundNumber > 0 ? session.roundNumber : 0;
+  return createSessionSummary({
+    ...session,
+    roundNumber: currentRound + 1,
+  });
+}
+
+function applyWinnerToSession(
+  session: SessionSummary,
+  winner: GameState["winner"],
+): SessionSummary {
+  if (winner === "player1") {
+    return createSessionSummary({
+      ...session,
+      player1Wins: session.player1Wins + 1,
+    });
+  }
+
+  if (winner === "player2") {
+    return createSessionSummary({
+      ...session,
+      player2Wins: session.player2Wins + 1,
+    });
+  }
+
+  return session;
 }
 
 function stopTickLoop(): void {
@@ -221,6 +258,10 @@ function runLocalSimulationStep(setState: StoreSetState): boolean {
     gameState: next,
     transition,
     renderVersion: state.renderVersion + 1,
+    session:
+      previous.status !== "game_over" && next.status === "game_over"
+        ? applyWinnerToSession(state.session, next.winner)
+        : state.session,
   }));
   scheduleTransitionClear(setState, transition);
 
@@ -301,6 +342,7 @@ async function startOnlineMatchmaking(
     mode: "matchmaking",
     gameState: engine.reset("waiting"),
     transition: null,
+    session: createSessionSummary(),
     online: createOnlineSessionState({
       connecting: true,
       lastError: null,
@@ -372,6 +414,7 @@ async function startOnlineMatchmaking(
           gameState: nextGame,
           transition,
           renderVersion: state.renderVersion + 1,
+          session: toSessionSummary(networkState),
           online: createOnlineSessionState({
             ...state.online,
             connecting: false,
@@ -401,6 +444,7 @@ async function startOnlineMatchmaking(
         mode: "menu",
         gameState: engine.reset("waiting"),
         transition: null,
+        session: createSessionSummary(),
         online: createOnlineSessionState({
           lastError: `Connexion fermée (${code})${reason ? `: ${reason}` : ""}`,
         }),
@@ -421,6 +465,7 @@ async function startOnlineMatchmaking(
         mode: "menu",
         gameState: engine.reset("waiting"),
         transition: null,
+        session: createSessionSummary(),
         online: createOnlineSessionState({
           ...state.online,
           connecting: false,
@@ -458,6 +503,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
     gameState: engine.getState(),
     transition: null,
     renderVersion: 0,
+    session: createSessionSummary(),
     online: createOnlineSessionState(),
     startLocalGame: () => {
       resetLocalManualTimeControl();
@@ -470,6 +516,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         mode: "local",
         gameState: next,
         transition: null,
+        session: createNewSession(),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
@@ -484,6 +531,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         mode: "local",
         gameState: next,
         transition: null,
+        session: advanceSessionRound(state.session),
         renderVersion: state.renderVersion + 1,
       }));
       startLocalTickLoop(set);
@@ -502,6 +550,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         mode: "menu",
         gameState: waiting,
         transition: null,
+        session: createSessionSummary(),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
@@ -526,6 +575,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         mode: "menu",
         gameState: waiting,
         transition: null,
+        session: createSessionSummary(),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
@@ -610,6 +660,7 @@ function renderGameToText(): string {
     automation: {
       manualTimeControl: localManualTimeControl,
     },
+    session: state.session,
   };
 
   return JSON.stringify(payload);

@@ -119,7 +119,7 @@ describe("App component states", () => {
     render(<App />);
 
     expect(screen.queryByTestId("touch-controls-dock")).not.toBeInTheDocument();
-    expect(screen.getByText("Room en attente")).toBeInTheDocument();
+    expect(screen.getAllByText("Room en attente")).not.toHaveLength(0);
     expect(screen.getByText(/En attente d'un adversaire/i)).toBeInTheDocument();
   });
 });
@@ -135,6 +135,11 @@ function createStoreState(
     mode: overrides.mode ?? "menu",
     gameState: overrides.gameState ?? createGameState("waiting"),
     transition: null,
+    session: {
+      roundNumber: 0,
+      player1Wins: 0,
+      player2Wins: 0,
+    },
     online: {
       connecting: false,
       roomId: null,

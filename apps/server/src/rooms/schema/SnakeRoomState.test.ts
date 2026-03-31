@@ -33,8 +33,13 @@ describe("applyGameStateToSchema", () => {
       consumedFoodPosition: { x: 6, y: 4 },
       eliminatedSnakeIds: ["player1"],
     };
+    const session = {
+      roundNumber: 3,
+      player1Wins: 1,
+      player2Wins: 1,
+    };
 
-    applyGameStateToSchema(state, game, 9, tickEvent);
+    applyGameStateToSchema(state, game, 9, tickEvent, session);
 
     expect(state.status).toBe("game_over");
     expect(state.winner).toBe("player2");
@@ -49,6 +54,9 @@ describe("applyGameStateToSchema", () => {
     expect({ x: state.consumedFoodPosition.x, y: state.consumedFoodPosition.y }).toEqual({ x: 6, y: 4 });
     expect(state.player1EliminatedThisTick).toBe(true);
     expect(state.player2EliminatedThisTick).toBe(false);
+    expect(state.roundNumber).toBe(3);
+    expect(state.player1Wins).toBe(1);
+    expect(state.player2Wins).toBe(1);
     expect(state.snakes).toHaveLength(2);
     expect(state.snakes[0]?.id).toBe("player1");
     expect(state.snakes[0]?.body).toHaveLength(3);
@@ -91,6 +99,9 @@ describe("applyGameStateToSchema", () => {
     expect({ x: state.consumedFoodPosition.x, y: state.consumedFoodPosition.y }).toEqual({ x: 0, y: 0 });
     expect(state.player1EliminatedThisTick).toBe(false);
     expect(state.player2EliminatedThisTick).toBe(false);
+    expect(state.roundNumber).toBe(0);
+    expect(state.player1Wins).toBe(0);
+    expect(state.player2Wins).toBe(0);
     expect(state.snakes).toHaveLength(1);
     expect(state.snakes[0]?.id).toBe("player1");
   });

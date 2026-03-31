@@ -1,6 +1,12 @@
 import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState, type TickEvent } from "@snake-duel/shared";
 import { describe, expect, it } from "vitest";
-import { computeTransition, toSharedGameState, toTickEvent } from "./localGameStore.helpers.js";
+import {
+  computeTransition,
+  createSessionSummary,
+  toSessionSummary,
+  toSharedGameState,
+  toTickEvent,
+} from "./localGameStore.helpers.js";
 
 describe("computeTransition", () => {
   it("prefers explicit tick event data for food and eliminations", () => {
@@ -170,6 +176,26 @@ describe("toSharedGameState", () => {
       food: null,
       winner: null,
     });
+  });
+});
+
+describe("session summary helpers", () => {
+  it("normalizes session state from network payloads", () => {
+    expect(
+      toSessionSummary({
+        roundNumber: 4,
+        player1Wins: 2,
+        player2Wins: 1,
+      }),
+    ).toEqual({
+      roundNumber: 4,
+      player1Wins: 2,
+      player2Wins: 1,
+    });
+  });
+
+  it("falls back to an empty session when the payload is invalid", () => {
+    expect(toSessionSummary({ roundNumber: "oops" })).toEqual(createSessionSummary());
   });
 });
 
