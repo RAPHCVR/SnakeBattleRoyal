@@ -22,24 +22,10 @@ export function alignWorldPosition(
   target: GridPosition,
 ): WorldPoint {
   const base = toBoardPosition(layout, target);
-  let best = base;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  for (const xOffset of [-layout.boardWidth, 0, layout.boardWidth]) {
-    for (const yOffset of [-layout.boardHeight, 0, layout.boardHeight]) {
-      const candidate = {
-        x: base.x + xOffset,
-        y: base.y + yOffset,
-      };
-      const distance = Math.abs(candidate.x - anchorWorld.x) + Math.abs(candidate.y - anchorWorld.y);
-      if (distance < bestDistance) {
-        best = candidate;
-        bestDistance = distance;
-      }
-    }
-  }
-
-  return best;
+  return {
+    x: alignWrappedAxis(anchorWorld.x, base.x, layout.boardWidth),
+    y: alignWrappedAxis(anchorWorld.y, base.y, layout.boardHeight),
+  };
 }
 
 export function interpolateTimedWorld(
@@ -97,39 +83,44 @@ export function resolveWrappedWorld(layout: ArenaBoardLayout, world: WorldPoint)
   const maxX = layout.offsetX + layout.boardWidth - halfCell;
   const minY = layout.offsetY + halfCell;
   const maxY = layout.offsetY + layout.boardHeight - halfCell;
+  const wrappedX = normalizeWrappedAxis(world.x, minX, layout.boardWidth);
+  const wrappedY = normalizeWrappedAxis(world.y, minY, layout.boardHeight);
 
-  if (world.x < minX) {
+  if (wrappedX > maxX) {
     return {
-      primary: world,
-      ghost: { x: world.x + layout.boardWidth, y: world.y },
+      primary: { x: wrappedX, y: wrappedY },
+      ghost: { x: wrappedX - layout.boardWidth, y: wrappedY },
     };
   }
 
-  if (world.x > maxX) {
+  if (wrappedY > maxY) {
     return {
-      primary: world,
-      ghost: { x: world.x - layout.boardWidth, y: world.y },
-    };
-  }
-
-  if (world.y < minY) {
-    return {
-      primary: world,
-      ghost: { x: world.x, y: world.y + layout.boardHeight },
-    };
-  }
-
-  if (world.y > maxY) {
-    return {
-      primary: world,
-      ghost: { x: world.x, y: world.y - layout.boardHeight },
+      primary: { x: wrappedX, y: wrappedY },
+      ghost: { x: wrappedX, y: wrappedY - layout.boardHeight },
     };
   }
 
   return {
-    primary: world,
+    primary: { x: wrappedX, y: wrappedY },
     ghost: null,
   };
+}
+
+function alignWrappedAxis(anchor: number, base: number, span: number): number {
+  if (!Number.isFinite(span) || span <= 0) {
+    return base;
+  }
+
+  const wraps = Math.round((anchor - base) / span);
+  return base + wraps * span;
+}
+
+function normalizeWrappedAxis(value: number, min: number, span: number): number {
+  if (!Number.isFinite(span) || span <= 0) {
+    return value;
+  }
+
+  return min + modulo(value - min, span);
 }
 
 function linear(start: number, end: number, progress: number): number {
@@ -138,4 +129,9 @@ function linear(start: number, end: number, progress: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function modulo(value: number, span: number): number {
+  const wrapped = value % span;
+  return wrapped < 0 ? wrapped + span : wrapped;
 }

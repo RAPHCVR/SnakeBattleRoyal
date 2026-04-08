@@ -21,6 +21,14 @@ describe("segmentMotion", () => {
     expect(
       alignWorldPosition(layout, { x: 20, y: 220 }, { x: 19, y: 5 }),
     ).toEqual({ x: -20, y: 220 });
+
+    expect(
+      alignWorldPosition(layout, { x: -780, y: 220 }, { x: 19, y: 5 }),
+    ).toEqual({ x: -820, y: 220 });
+
+    expect(
+      alignWorldPosition(layout, { x: 1580, y: 220 }, { x: 0, y: 5 }),
+    ).toEqual({ x: 1620, y: 220 });
   });
 
   it("interpolates timed motion with clamped progress", () => {
@@ -69,8 +77,29 @@ describe("segmentMotion", () => {
     expect(
       resolveWrappedWorld(layout, { x: -20, y: 220 }),
     ).toEqual({
-      primary: { x: -20, y: 220 },
-      ghost: { x: 780, y: 220 },
+      primary: { x: 780, y: 220 },
+      ghost: null,
+    });
+
+    expect(
+      resolveWrappedWorld(layout, { x: -10, y: 220 }),
+    ).toEqual({
+      primary: { x: 790, y: 220 },
+      ghost: { x: -10, y: 220 },
+    });
+
+    expect(
+      resolveWrappedWorld(layout, { x: -790, y: 220 }),
+    ).toEqual({
+      primary: { x: 810, y: 220 },
+      ghost: { x: 10, y: 220 },
+    });
+
+    expect(
+      resolveWrappedWorld(layout, { x: 300, y: -790 }),
+    ).toEqual({
+      primary: { x: 300, y: 810 },
+      ghost: { x: 300, y: 10 },
     });
 
     expect(
