@@ -100,10 +100,8 @@ export function App() {
           ? "h-[min(50svh,19rem)] min-h-[14rem] sm:h-[min(52svh,20rem)]"
           : touchMode === "online"
             ? "h-[min(54svh,21rem)] min-h-[14rem] sm:h-[min(56svh,23rem)]"
-            : immersiveDesktopMode
-              ? "h-[calc(100svh-7rem)] min-h-[33rem]"
-              : desktopGameMode
-                ? "h-[min(calc(100svh-10rem),44rem)] min-h-[29rem]"
+            : desktopGameMode
+              ? "flex-1 min-h-0"
                 : mobileMenu
                   ? "h-[min(50svh,18rem)] min-h-[17rem]"
                   : "h-[min(62vh,32rem)] min-h-[360px] xl:h-[min(66vh,38rem)]";
@@ -241,10 +239,8 @@ export function App() {
         className={`mx-auto flex w-full flex-col ${
           touchFocusMode
             ? "h-full max-w-none gap-3"
-            : immersiveDesktopMode
-              ? "max-w-none gap-2"
-              : desktopGameMode
-                ? "max-w-[72rem] gap-3"
+            : desktopGameMode
+              ? `${immersiveDesktopMode ? "max-w-none" : "max-w-[72rem]"} h-[calc(100svh-1.5rem)] min-h-0 gap-3`
                 : splitTouchLocal
                   ? "max-w-6xl gap-2 sm:gap-3"
                   : "gap-5"

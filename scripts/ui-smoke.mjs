@@ -42,6 +42,7 @@ try {
   const results = [];
   results.push(await runMenuScenario());
   results.push(await runDesktopLocalScenario());
+  results.push(await runDesktopLocalFullscreenScenario());
   results.push(await runMobileMenuScenario());
   results.push(await runMobileLocalScenario());
   results.push(await runMobileLocalFullscreenScenario());
@@ -252,6 +253,51 @@ async function runDesktopLocalScenario() {
   await browser.close();
 
   return { scenario: "desktop-local", screenshotPath, snapshot, issues };
+}
+
+async function runDesktopLocalFullscreenScenario() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Local/i }).click();
+  await page.waitForTimeout(1200);
+  await page.getByRole("button", { name: /Plein ecran/i }).click();
+  await page.waitForTimeout(450);
+
+  const snapshot = await collectSnapshot(page);
+  const screenshotPath = path.join(artifactsDir, "desktop-local-fullscreen.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion(
+    "desktop local fullscreen keeps the hud outside the playfield",
+    (snapshot.hud?.bottom ?? 0) <= (snapshot.section?.top ?? Number.POSITIVE_INFINITY) + 1,
+    { hud: snapshot.hud, section: snapshot.section },
+  );
+  pushAssertion(
+    "desktop local fullscreen keeps the square canvas inside the viewport",
+    (snapshot.canvas?.bottom ?? 0) <= snapshot.viewport.height + 1,
+    { canvas: snapshot.canvas, viewport: snapshot.viewport },
+  );
+  pushAssertion(
+    "desktop local fullscreen keeps the square canvas inside the panel",
+    (snapshot.canvas?.cssHeight ?? Number.POSITIVE_INFINITY) <=
+      (snapshot.section?.height ?? Number.NEGATIVE_INFINITY) + 1,
+    { canvas: snapshot.canvas, section: snapshot.section },
+  );
+  pushAssertion(
+    "desktop local fullscreen has no vertical scroll",
+    !snapshot.scroll.hasVerticalScroll,
+    snapshot.scroll,
+  );
+  pushAssertion("desktop local fullscreen has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "desktop-local-fullscreen", screenshotPath, snapshot, issues };
 }
 
 async function runMobileMenuScenario() {
