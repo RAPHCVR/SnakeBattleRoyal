@@ -1182,6 +1182,56 @@ body {
   }
 }
 
+@media (max-height: 600px) {
+  .touch-dock__inner--floating-local {
+    width: min(100%, 19.5rem);
+    padding: 0.08rem;
+  }
+
+  .touch-dock__floating-header {
+    gap: 0.25rem;
+    margin-bottom: 0;
+  }
+
+  .touch-dock__floating-label {
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+  }
+
+  .touch-dock__inner--floating-local .touch-dock__pads {
+    gap: 0.18rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pad {
+    gap: 0.16rem;
+    padding: 0.1rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pad__matrix {
+    min-height: min(19vw, 3.35rem);
+    gap: 0.08rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pad__button {
+    min-height: 1.2rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pad__icon {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pad__core-title {
+    font-size: 0.52rem;
+  }
+
+  .touch-dock__inner--floating-local .touch-pill-button--compact {
+    min-height: 1.45rem;
+    padding: 0.16rem 0.45rem;
+    font-size: 0.58rem;
+  }
+}
+
 @media (min-width: 640px) {
   .app-shell--touch-local {
     padding-bottom: calc(1rem + env(safe-area-inset-bottom));
