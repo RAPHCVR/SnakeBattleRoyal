@@ -51,6 +51,7 @@ describe("applyGameStateToSchema", () => {
     expect(state.width).toBe(DEFAULT_GAME_CONFIG.width);
     expect(state.height).toBe(DEFAULT_GAME_CONFIG.height);
     expect(state.tickRateMs).toBe(DEFAULT_GAME_CONFIG.tickRateMs);
+    expect(state.nextTickAtMs).toBe(0);
     expect(state.hasFood).toBe(true);
     expect({ x: state.food.x, y: state.food.y }).toEqual({ x: 7, y: 4 });
     expect(state.lastEventTick).toBe(9);
@@ -112,6 +113,32 @@ describe("applyGameStateToSchema", () => {
     expect(state.countdownDurationMs).toBe(0);
     expect(state.snakes).toHaveLength(1);
     expect(state.snakes[0]?.id).toBe("player1");
+  });
+
+  it("syncs the next server tick timestamp when runtime timing is provided", () => {
+    const state = new SnakeRoomState();
+
+    applyGameStateToSchema(
+      state,
+      createGameState(),
+      8,
+      null,
+      undefined,
+      {
+        processedInputSequences: {
+          player1: 2,
+          player2: 3,
+        },
+        rngSeed: 44,
+        nextTickAtMs: 98_765,
+      },
+    );
+
+    expect(state.tick).toBe(8);
+    expect(state.nextTickAtMs).toBe(98_765);
+    expect(state.player1ProcessedInputSequence).toBe(2);
+    expect(state.player2ProcessedInputSequence).toBe(3);
+    expect(state.rngSeed).toBe(44);
   });
 });
 

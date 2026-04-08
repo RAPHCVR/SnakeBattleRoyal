@@ -1,17 +1,14 @@
 import type { GameState, GridPosition, SnakeState } from "@snake-duel/shared";
 import Phaser from "phaser";
 import { useLocalGameStore } from "../localGameStore.js";
-import {
-  FOOD_PARTICLE_TEXTURE,
-  GRID_HEIGHT,
-  GRID_WIDTH,
-} from "./constants.js";
+import { FOOD_PARTICLE_TEXTURE, GRID_HEIGHT, GRID_WIDTH } from "./constants.js";
 import {
   computeArenaBoardLayout,
   getBoardSegmentSize,
   toBoardPosition,
   type ArenaBoardLayout,
 } from "./boardLayout.js";
+import { computeWrapTweenPlan } from "./wrapMotion.js";
 
 type SegmentNode = Phaser.GameObjects.Rectangle;
 
@@ -29,6 +26,7 @@ const PALETTE = {
 
 export class SnakeArenaScene extends Phaser.Scene {
   private readonly segments = new Map<string, SegmentNode>();
+  private readonly wrapGhosts = new Map<string, SegmentNode>();
   private boardGraphics: Phaser.GameObjects.Graphics | null = null;
   private foodNode: Phaser.GameObjects.Arc | null = null;
   private foodPulseTween: Phaser.Tweens.Tween | null = null;
@@ -68,6 +66,11 @@ export class SnakeArenaScene extends Phaser.Scene {
     this.foodPulseTween = null;
     this.boardGraphics = null;
     this.layout = null;
+
+    for (const node of this.wrapGhosts.values()) {
+      node.destroy();
+    }
+    this.wrapGhosts.clear();
   }
 
   private renderFromStore(force: boolean): void {
@@ -184,6 +187,7 @@ export class SnakeArenaScene extends Phaser.Scene {
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
+    const activeGhostKeys = new Set<string>();
 
     for (const snake of state.snakes) {
       const previousSnake = previousById.get(snake.id);
@@ -197,20 +201,56 @@ export class SnakeArenaScene extends Phaser.Scene {
 
         const visualAlive = didSnakeDieThisTick(previousSnake, snake) ? true : snake.alive;
         const node = this.ensureSegmentNode(key, snake, index, visualAlive, layout);
+        const ghostKey = `${key}::wrap`;
         const target = toBoardPosition(layout, segment);
         const from = previousSnake?.body[index];
 
         this.tweens.killTweensOf(node);
         if (snapPositions || !from) {
           node.setPosition(target.x, target.y);
+          this.clearWrapGhost(ghostKey);
           continue;
         }
 
-        if (areSameGridPosition(from, segment) || isWrappedMove(from, segment)) {
+        if (areSameGridPosition(from, segment)) {
           node.setPosition(target.x, target.y);
+          this.clearWrapGhost(ghostKey);
           continue;
         }
 
+        const wrapTweenPlan = computeWrapTweenPlan(layout, from, segment);
+        if (wrapTweenPlan) {
+          const ghost = this.ensureWrapGhostNode(ghostKey, snake, index, visualAlive, layout);
+          activeGhostKeys.add(ghostKey);
+          this.tweens.killTweensOf(ghost);
+          node.setPosition(wrapTweenPlan.primaryStart.x, wrapTweenPlan.primaryStart.y);
+          ghost.setPosition(wrapTweenPlan.ghostStart.x, wrapTweenPlan.ghostStart.y);
+
+          this.tweens.add({
+            targets: node,
+            x: wrapTweenPlan.primaryTarget.x,
+            y: wrapTweenPlan.primaryTarget.y,
+            duration: transitionDurationMs,
+            ease: "Linear",
+          });
+          this.tweens.add({
+            targets: ghost,
+            x: wrapTweenPlan.ghostTarget.x,
+            y: wrapTweenPlan.ghostTarget.y,
+            duration: transitionDurationMs,
+            ease: "Linear",
+            onComplete: () => {
+              const activeGhost = this.wrapGhosts.get(ghostKey);
+              if (activeGhost === ghost) {
+                ghost.destroy();
+                this.wrapGhosts.delete(ghostKey);
+              }
+            },
+          });
+          continue;
+        }
+
+        this.clearWrapGhost(ghostKey);
         this.tweens.add({
           targets: node,
           x: target.x,
@@ -228,6 +268,16 @@ export class SnakeArenaScene extends Phaser.Scene {
       node.destroy();
       this.segments.delete(key);
     }
+
+    for (const [key, node] of this.wrapGhosts) {
+      if (activeGhostKeys.has(key)) {
+        continue;
+      }
+
+      this.tweens.killTweensOf(node);
+      node.destroy();
+      this.wrapGhosts.delete(key);
+    }
   }
 
   private ensureSegmentNode(
@@ -238,6 +288,7 @@ export class SnakeArenaScene extends Phaser.Scene {
     layout: ArenaBoardLayout,
   ): SegmentNode {
     const existing = this.segments.get(key);
+    const alpha = visualAlive ? 1 : 0.72;
     const size = getBoardSegmentSize(layout, index);
     const color = getSnakeColor(snake, index, visualAlive);
     if (existing) {
@@ -245,14 +296,52 @@ export class SnakeArenaScene extends Phaser.Scene {
         .setSize(size, size)
         .setDisplaySize(size, size)
         .setFillStyle(color)
-        .setAlpha(visualAlive ? 1 : 0.72);
+        .setAlpha(alpha);
       return existing;
     }
 
     const node = this.add.rectangle(0, 0, size, size, color).setDepth(10);
-    node.setAlpha(visualAlive ? 1 : 0.72);
+    node.setAlpha(alpha);
     this.segments.set(key, node);
     return node;
+  }
+
+  private ensureWrapGhostNode(
+    key: string,
+    snake: SnakeState,
+    index: number,
+    visualAlive: boolean,
+    layout: ArenaBoardLayout,
+  ): SegmentNode {
+    const existing = this.wrapGhosts.get(key);
+    const alpha = visualAlive ? 1 : 0.72;
+    const size = getBoardSegmentSize(layout, index);
+    const color = getSnakeColor(snake, index, visualAlive);
+    if (existing) {
+      existing
+        .setVisible(true)
+        .setSize(size, size)
+        .setDisplaySize(size, size)
+        .setFillStyle(color)
+        .setAlpha(alpha);
+      return existing;
+    }
+
+    const node = this.add.rectangle(0, 0, size, size, color).setDepth(10);
+    node.setAlpha(alpha);
+    this.wrapGhosts.set(key, node);
+    return node;
+  }
+
+  private clearWrapGhost(key: string): void {
+    const ghost = this.wrapGhosts.get(key);
+    if (!ghost) {
+      return;
+    }
+
+    this.tweens.killTweensOf(ghost);
+    ghost.destroy();
+    this.wrapGhosts.delete(key);
   }
 
   private startFoodPulse(): void {
@@ -325,13 +414,4 @@ function didSnakeDieThisTick(previous: SnakeState | undefined, next: SnakeState)
 
 function areSameGridPosition(a: GridPosition, b: GridPosition): boolean {
   return a.x === b.x && a.y === b.y;
-}
-
-function isWrappedMove(from: GridPosition, to: GridPosition): boolean {
-  return (
-    (from.x === GRID_WIDTH - 1 && to.x === 0 && from.y === to.y) ||
-    (from.x === 0 && to.x === GRID_WIDTH - 1 && from.y === to.y) ||
-    (from.y === GRID_HEIGHT - 1 && to.y === 0 && from.x === to.x) ||
-    (from.y === 0 && to.y === GRID_HEIGHT - 1 && from.x === to.x)
-  );
 }

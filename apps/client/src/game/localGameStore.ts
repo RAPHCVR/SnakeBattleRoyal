@@ -17,10 +17,13 @@ import {
 import { create } from "zustand";
 import {
   areGameStatesEquivalent,
+  computeServerClockOffsetMs,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
+  resolveNextTickDelayMs,
   toNetworkQuality,
+  toNextTickAtMs,
   toProcessedInputSequences,
   toRngSeed,
   toSessionSummary,
@@ -127,8 +130,9 @@ const ONLINE_INPUT_BUFFER_SIZE = 3;
 const ONLINE_PING_INTERVAL_MS = 2_000;
 const ONLINE_LATENCY_EWMA_ALPHA = 0.25;
 const ONLINE_JITTER_EWMA_ALPHA = 0.2;
-const ONLINE_PREDICTION_BUFFER_MS = 6;
-const ONLINE_MIN_PREDICTION_DELAY_MS = 12;
+const ONLINE_CLOCK_OFFSET_EWMA_ALPHA = 0.2;
+const ONLINE_MIN_PREDICTION_DELAY_MS = 1;
+const ONLINE_PREDICTION_SPIN_THRESHOLD_MS = 12;
 const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
 const ROUND_START_COUNTDOWN_MS = 3_000;
 
@@ -143,19 +147,22 @@ let localManualTimeControl = false;
 let localManualTimeRemainderMs = 0;
 let onlinePredictionTimeoutHandle: number | null = null;
 let onlinePredictionDueAtMs: number | null = null;
+let onlinePredictionAnimationFrameHandle: number | null = null;
 let onlinePingIntervalHandle: number | null = null;
 let onlinePredictionRuntime: EngineRuntime | null = null;
 let onlineAuthoritativeState: GameState | null = null;
 let onlineAuthoritativeTick = 0;
+let onlineNextTickAtMs: number | null = null;
 let onlineAuthoritativeProcessedInputs: ProcessedInputSequences = createEmptyProcessedInputSequences();
 let onlineAuthoritativeRngSeed = 1;
 let onlinePendingInputs: PendingOnlineInput[] = [];
 let onlineNextInputSequence = 1;
 let onlinePingNonce = 1;
-let onlineOutstandingPings = new Map<number, number>();
+let onlineOutstandingPings = new Map<number, PendingOnlinePing>();
 let onlineLatencyMs: number | null = null;
 let onlineJitterMs: number | null = null;
 let onlineLastRttSampleMs: number | null = null;
+let onlineClockOffsetMs: number | null = null;
 let onlineCorrectionCount = 0;
 let onlineLastCorrectionDistance = 0;
 
@@ -181,6 +188,11 @@ interface PendingOnlineInput {
   readonly direction: Direction;
 }
 
+interface PendingOnlinePing {
+  readonly perfSentAtMs: number;
+  readonly wallSentAtMs: number;
+}
+
 interface InputFeedbackMessage {
   readonly sequence?: number;
   readonly accepted?: boolean;
@@ -191,6 +203,7 @@ interface PongMessage {
   readonly nonce?: number;
   readonly clientSentAtMs?: number;
   readonly serverReceivedAtMs?: number;
+  readonly serverSentAtMs?: number;
 }
 
 function createOnlineNetworkState(
@@ -349,12 +362,16 @@ function ensureBrowserTransportPatch(): void {
 }
 
 function stopOnlinePredictionLoop(): void {
-  if (onlinePredictionTimeoutHandle === null) {
-    return;
+  if (onlinePredictionTimeoutHandle !== null) {
+    window.clearTimeout(onlinePredictionTimeoutHandle);
+    onlinePredictionTimeoutHandle = null;
   }
 
-  window.clearTimeout(onlinePredictionTimeoutHandle);
-  onlinePredictionTimeoutHandle = null;
+  if (onlinePredictionAnimationFrameHandle !== null) {
+    window.cancelAnimationFrame(onlinePredictionAnimationFrameHandle);
+    onlinePredictionAnimationFrameHandle = null;
+  }
+
   onlinePredictionDueAtMs = null;
 }
 
@@ -373,6 +390,7 @@ function resetOnlineRuntimeState(): void {
   onlinePredictionRuntime = null;
   onlineAuthoritativeState = null;
   onlineAuthoritativeTick = 0;
+  onlineNextTickAtMs = null;
   onlineAuthoritativeProcessedInputs = createEmptyProcessedInputSequences();
   onlineAuthoritativeRngSeed = 1;
   onlinePendingInputs = [];
@@ -381,6 +399,7 @@ function resetOnlineRuntimeState(): void {
   onlineLatencyMs = null;
   onlineJitterMs = null;
   onlineLastRttSampleMs = null;
+  onlineClockOffsetMs = null;
   onlineCorrectionCount = 0;
   onlineLastCorrectionDistance = 0;
 }
@@ -457,6 +476,22 @@ function updateOnlineNetworkMetrics(sampleRttMs: number): void {
   onlineLastRttSampleMs = sampleRttMs;
 }
 
+function updateOnlineClockOffset(sampleOffsetMs: number | null): void {
+  if (sampleOffsetMs === null || !Number.isFinite(sampleOffsetMs)) {
+    return;
+  }
+
+  if (onlineClockOffsetMs === null) {
+    onlineClockOffsetMs = sampleOffsetMs;
+  } else {
+    onlineClockOffsetMs += (sampleOffsetMs - onlineClockOffsetMs) * ONLINE_CLOCK_OFFSET_EWMA_ALPHA;
+  }
+}
+
+function getEstimatedServerNowMs(): number | null {
+  return onlineClockOffsetMs === null ? null : Date.now() + onlineClockOffsetMs;
+}
+
 function getEstimatedOneWayDelayMs(tickRateMs: number): number {
   if (onlineLatencyMs !== null) {
     return Math.max(0, Math.round(onlineLatencyMs / 2));
@@ -465,9 +500,18 @@ function getEstimatedOneWayDelayMs(tickRateMs: number): number {
   return Math.round(tickRateMs * 0.45);
 }
 
-function computePredictionDelayMs(tickRateMs: number): number {
-  const estimatedDelay = tickRateMs - getEstimatedOneWayDelayMs(tickRateMs) - ONLINE_PREDICTION_BUFFER_MS;
-  return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, estimatedDelay));
+function computeHeuristicPredictionDelayMs(tickRateMs: number): number {
+  const estimatedDelay = tickRateMs - getEstimatedOneWayDelayMs(tickRateMs);
+  return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, Math.round(estimatedDelay)));
+}
+
+function computeOnlineTickDelayMs(tickRateMs: number): number {
+  return resolveNextTickDelayMs({
+    tickRateMs,
+    fallbackDelayMs: computeHeuristicPredictionDelayMs(tickRateMs),
+    nextTickAtMs: onlineNextTickAtMs,
+    estimatedServerNowMs: getEstimatedServerNowMs(),
+  });
 }
 
 function computeCorrectionTransitionDurationMs(tickRateMs: number): number {
@@ -476,7 +520,6 @@ function computeCorrectionTransitionDurationMs(tickRateMs: number): number {
 
 function computeAuthoritativeTransitionDurationMs(
   tickRateMs: number,
-  ownSnakeId: SnakeId | null,
   status: GameState["status"],
   correctionActive: boolean,
   correctionDistance: number,
@@ -489,11 +532,7 @@ function computeAuthoritativeTransitionDurationMs(
     return computeCorrectionTransitionDurationMs(tickRateMs);
   }
 
-  if (ownSnakeId) {
-    return computePredictionDelayMs(tickRateMs);
-  }
-
-  return tickRateMs;
+  return computeOnlineTickDelayMs(tickRateMs);
 }
 
 function shouldKeepPredictedDisplayState(
@@ -624,15 +663,26 @@ function scheduleOnlinePredictionStep(
 
   onlinePredictionTimeoutHandle = window.setTimeout(() => {
     onlinePredictionTimeoutHandle = null;
-    onlinePredictionDueAtMs = null;
-    const advanced = runOnlinePredictionStep(setState);
-    if (!advanced) {
-      return;
-    }
+    flushOnlinePredictionWhenDue(setState);
+  }, Math.max(0, normalizedDelayMs - ONLINE_PREDICTION_SPIN_THRESHOLD_MS));
+}
 
-    const tickRateMs = onlinePredictionRuntime?.game.config.tickRateMs ?? DEFAULT_GAME_CONFIG.tickRateMs;
-    scheduleOnlinePredictionStep(setState, tickRateMs);
-  }, stepDelayMs);
+function flushOnlinePredictionWhenDue(setState: StoreSetState): void {
+  if (onlinePredictionDueAtMs === null) {
+    onlinePredictionAnimationFrameHandle = null;
+    return;
+  }
+
+  if (performance.now() + 0.5 < onlinePredictionDueAtMs) {
+    onlinePredictionAnimationFrameHandle = window.requestAnimationFrame(() => {
+      flushOnlinePredictionWhenDue(setState);
+    });
+    return;
+  }
+
+  onlinePredictionDueAtMs = null;
+  onlinePredictionAnimationFrameHandle = null;
+  runOnlinePredictionStep(setState);
 }
 
 function runOnlinePredictionStep(
@@ -691,8 +741,12 @@ function startOnlinePingLoop(): void {
 
   const sendPing = () => {
     const nonce = onlinePingNonce++;
-    const clientSentAtMs = performance.now();
-    onlineOutstandingPings.set(nonce, clientSentAtMs);
+    const perfSentAtMs = performance.now();
+    const clientSentAtMs = Date.now();
+    onlineOutstandingPings.set(nonce, {
+      perfSentAtMs,
+      wallSentAtMs: clientSentAtMs,
+    });
     room.send("ping", { nonce, clientSentAtMs });
   };
 
@@ -883,13 +937,21 @@ async function startOnlineMatchmaking(
         return;
       }
 
-      const sentAt = onlineOutstandingPings.get(nonce);
-      if (sentAt === undefined) {
+      const pendingPing = onlineOutstandingPings.get(nonce);
+      if (pendingPing === undefined) {
         return;
       }
 
       onlineOutstandingPings.delete(nonce);
-      updateOnlineNetworkMetrics(Math.max(0, performance.now() - sentAt));
+      updateOnlineNetworkMetrics(Math.max(0, performance.now() - pendingPing.perfSentAtMs));
+      updateOnlineClockOffset(
+        computeServerClockOffsetMs(
+          pendingPing.wallSentAtMs,
+          Date.now(),
+          toFiniteNumber(payload?.serverReceivedAtMs, 0),
+          toFiniteNumber(payload?.serverSentAtMs, 0),
+        ),
+      );
 
       setState((state) => ({
         ...state,
@@ -913,6 +975,7 @@ async function startOnlineMatchmaking(
       const tickEvent = toTickEvent(networkState);
       const processedInputs = toProcessedInputSequences(networkState);
       const rngSeed = toRngSeed(networkState);
+      const nextTickAtMs = nextGame.status === "running" ? toNextTickAtMs(networkState) : null;
       const connectedPlayers = toFiniteNumber((networkState as AnyRecord).connectedPlayers, 0);
       const countdownEndsAtMs = toFiniteNumber((networkState as AnyRecord).countdownEndsAtMs, 0);
       const countdownDurationMs = toFiniteNumber((networkState as AnyRecord).countdownDurationMs, 0);
@@ -929,6 +992,7 @@ async function startOnlineMatchmaking(
 
       onlineAuthoritativeState = nextGame;
       onlineAuthoritativeTick = tick;
+      onlineNextTickAtMs = nextTickAtMs;
       onlineAuthoritativeProcessedInputs = processedInputs;
       onlineAuthoritativeRngSeed = rngSeed;
 
@@ -997,7 +1061,7 @@ async function startOnlineMatchmaking(
         });
 
         if (nextGame.status === "running") {
-          scheduleOnlinePredictionStep(setState, computePredictionDelayMs(nextGame.config.tickRateMs));
+          scheduleOnlinePredictionStep(setState, computeOnlineTickDelayMs(nextGame.config.tickRateMs));
         } else {
           stopOnlinePredictionLoop();
         }
@@ -1023,7 +1087,6 @@ async function startOnlineMatchmaking(
         tickEvent,
         computeAuthoritativeTransitionDurationMs(
           nextGame.config.tickRateMs,
-          currentStore.online.ownSnakeId,
           nextGame.status,
           correctionActive,
           correctionDistance,
@@ -1077,7 +1140,7 @@ async function startOnlineMatchmaking(
       scheduleTransitionClear(setState, transition);
 
       if (nextGame.status === "running") {
-        scheduleOnlinePredictionStep(setState, computePredictionDelayMs(nextGame.config.tickRateMs));
+        scheduleOnlinePredictionStep(setState, computeOnlineTickDelayMs(nextGame.config.tickRateMs));
       } else {
         stopOnlinePredictionLoop();
       }
@@ -1330,7 +1393,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       }));
 
       if (onlinePredictionTimeoutHandle === null) {
-        scheduleOnlinePredictionStep(set, computePredictionDelayMs(state.gameState.config.tickRateMs));
+        scheduleOnlinePredictionStep(set, computeOnlineTickDelayMs(state.gameState.config.tickRateMs));
       }
       return true;
     },

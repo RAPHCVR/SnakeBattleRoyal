@@ -430,7 +430,9 @@ async function runMobileLocalFullscreenScenario() {
   pushAssertion("mobile local fullscreen keeps the arena within viewport", !snapshot.section?.outOfViewport, snapshot.section);
   pushAssertion(
     "mobile local fullscreen keeps a dense backing canvas",
-    (snapshot.canvas?.backingScaleX ?? 0) >= 1 && (snapshot.canvas?.backingScaleX ?? 0) <= 2.05,
+    (snapshot.canvas?.backingScaleX ?? 0) >= 1 &&
+      (snapshot.canvas?.backingScaleX ?? 0) <=
+        Math.max(2.05, (snapshot.canvas?.devicePixelRatio ?? 1) + 0.25),
     snapshot.canvas,
   );
   pushAssertion(
@@ -818,14 +820,15 @@ async function collectSnapshot(page) {
         const cssWidth = Math.round(rect.width);
         const cssHeight = Math.round(rect.height);
 
-        return {
-          cssWidth,
-          cssHeight,
-          top: Math.round(rect.top),
-          bottom: Math.round(rect.bottom),
-          backingWidth: canvas.width,
-          backingHeight: canvas.height,
-          backingScaleX: Number((canvas.width / Math.max(rect.width, 1)).toFixed(2)),
+          return {
+            cssWidth,
+            cssHeight,
+            top: Math.round(rect.top),
+            bottom: Math.round(rect.bottom),
+            devicePixelRatio: Number((window.devicePixelRatio || 1).toFixed(2)),
+            backingWidth: canvas.width,
+            backingHeight: canvas.height,
+            backingScaleX: Number((canvas.width / Math.max(rect.width, 1)).toFixed(2)),
           backingScaleY: Number((canvas.height / Math.max(rect.height, 1)).toFixed(2)),
           outOfViewport:
             rect.x < -1 ||

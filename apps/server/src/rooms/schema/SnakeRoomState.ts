@@ -17,6 +17,7 @@ export interface RoundSessionState {
 export interface RoomRuntimeState {
   readonly processedInputSequences: ProcessedInputSequences;
   readonly rngSeed: number;
+  readonly nextTickAtMs: number | null;
 }
 
 export interface RoomCountdownState {
@@ -46,6 +47,7 @@ export class SnakeRoomState extends Schema {
   @type("number") public tickRateMs = 100;
   @type("number") public tick = 0;
   @type("number") public rngSeed = 1;
+  @type("number") public nextTickAtMs = 0;
 
   @type([SnakeSchema]) public snakes = new ArraySchema<SnakeSchema>();
 
@@ -79,6 +81,7 @@ export function applyGameStateToSchema(
   runtime: RoomRuntimeState = {
     processedInputSequences: createEmptyProcessedInputSequences(),
     rngSeed: 1,
+    nextTickAtMs: null,
   },
   countdown: RoomCountdownState = {
     endsAtMs: null,
@@ -190,6 +193,7 @@ function syncTickEvent(state: SnakeRoomState, tickEvent: TickEvent | null): void
 
 function syncRuntimeState(state: SnakeRoomState, runtime: RoomRuntimeState): void {
   state.rngSeed = runtime.rngSeed;
+  state.nextTickAtMs = runtime.nextTickAtMs ?? 0;
   state.player1ProcessedInputSequence = runtime.processedInputSequences.player1;
   state.player2ProcessedInputSequence = runtime.processedInputSequences.player2;
 }

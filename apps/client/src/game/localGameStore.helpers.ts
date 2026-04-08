@@ -139,6 +139,51 @@ export function toRngSeed(networkState: unknown): number {
   return Math.max(1, toFiniteNumber(data.rngSeed, 1));
 }
 
+export function toNextTickAtMs(networkState: unknown): number | null {
+  const data = isRecord(networkState) ? networkState : {};
+  const nextTickAtMs = toFiniteNumber(data.nextTickAtMs, 0);
+  return nextTickAtMs > 0 ? nextTickAtMs : null;
+}
+
+export function computeServerClockOffsetMs(
+  clientSentAtMs: number,
+  clientReceivedAtMs: number,
+  serverReceivedAtMs: number,
+  serverSentAtMs: number,
+): number | null {
+  if (
+    !Number.isFinite(clientSentAtMs) ||
+    !Number.isFinite(clientReceivedAtMs) ||
+    !Number.isFinite(serverReceivedAtMs) ||
+    !Number.isFinite(serverSentAtMs) ||
+    serverReceivedAtMs <= 0 ||
+    serverSentAtMs <= 0
+  ) {
+    return null;
+  }
+
+  return ((serverReceivedAtMs - clientSentAtMs) + (serverSentAtMs - clientReceivedAtMs)) / 2;
+}
+
+export function resolveNextTickDelayMs({
+  tickRateMs,
+  fallbackDelayMs,
+  nextTickAtMs,
+  estimatedServerNowMs,
+}: {
+  readonly tickRateMs: number;
+  readonly fallbackDelayMs: number;
+  readonly nextTickAtMs: number | null;
+  readonly estimatedServerNowMs: number | null;
+}): number {
+  const sourceDelayMs =
+    nextTickAtMs !== null && estimatedServerNowMs !== null
+      ? nextTickAtMs - estimatedServerNowMs
+      : fallbackDelayMs;
+
+  return clampTickDelayMs(sourceDelayMs, tickRateMs);
+}
+
 export function estimateSnakeHeadCorrection(
   previous: GameState,
   next: GameState,
@@ -334,6 +379,10 @@ function toBoolean(value: unknown, fallback: boolean): boolean {
 
 function toFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function clampTickDelayMs(delayMs: number, tickRateMs: number): number {
+  return Math.max(1, Math.min(tickRateMs, Math.round(delayMs)));
 }
 
 function isRecord(value: unknown): value is AnyRecord {

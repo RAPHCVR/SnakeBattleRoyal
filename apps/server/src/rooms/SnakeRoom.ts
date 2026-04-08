@@ -36,6 +36,7 @@ interface PongMessage {
   readonly nonce: number;
   readonly clientSentAtMs: number;
   readonly serverReceivedAtMs: number;
+  readonly serverSentAtMs: number;
 }
 
 const PLAYER_IDS: readonly SnakeId[] = ["player1", "player2"];
@@ -61,9 +62,10 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   private roundResultRecorded = false;
   private emptyRoomTimeout: ReturnType<typeof setTimeout> | null = null;
   private roundCountdownTimeout: ReturnType<typeof setTimeout> | null = null;
+  private nextSimulationAtMs: number | null = null;
 
   public override onCreate(): void {
-    this.patchRate = DEFAULT_GAME_CONFIG.tickRateMs;
+    this.patchRate = null;
 
     this.setMetadata({
       gameMode: "snake_duel",
@@ -72,8 +74,10 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
 
     this.setState(new SnakeRoomState());
     this.pushEngineState();
+    this.nextSimulationAtMs = Date.now() + DEFAULT_GAME_CONFIG.tickRateMs;
 
     this.setSimulationInterval(() => {
+      this.nextSimulationAtMs = Date.now() + DEFAULT_GAME_CONFIG.tickRateMs;
       const before = this.engine.getTick();
       const beforeEvent = this.engine.getLastTickEvent();
       this.engine.tick();
@@ -120,10 +124,13 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
     });
 
     this.onMessage<PingMessage>("ping", (client, payload) => {
+      const serverReceivedAtMs = Date.now();
+      const clientSentAtMs = toFiniteNumber(payload?.clientSentAtMs);
       client.send("pong", {
         nonce: toPositiveInteger(payload?.nonce) ?? 0,
-        clientSentAtMs: toFiniteNumber(payload?.clientSentAtMs),
-        serverReceivedAtMs: Date.now(),
+        clientSentAtMs,
+        serverReceivedAtMs,
+        serverSentAtMs: Date.now(),
       } satisfies PongMessage);
     });
 
@@ -142,6 +149,8 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
 
       if (this.rematchVotes.size === this.maxClients) {
         this.startRoundCountdown();
+      } else {
+        this.broadcastPatch();
       }
     });
   }
@@ -250,11 +259,13 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       {
         processedInputSequences: runtime.processedInputSequences,
         rngSeed: runtime.rngSeed,
+        nextTickAtMs: runtime.game.status === "running" ? this.nextSimulationAtMs : null,
       },
       this.countdown,
     );
     this.state.connectedPlayers = this.clients.length;
     this.syncRematchVotes();
+    this.broadcastPatch();
   }
 
   private syncRematchVotes(): void {

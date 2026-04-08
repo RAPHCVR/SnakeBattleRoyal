@@ -2,11 +2,14 @@ import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState, type TickEvent } 
 import { describe, expect, it } from "vitest";
 import {
   areGameStatesEquivalent,
+  computeServerClockOffsetMs,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
+  resolveNextTickDelayMs,
   toSessionSummary,
   toNetworkQuality,
+  toNextTickAtMs,
   toProcessedInputSequences,
   toRngSeed,
   toSharedGameState,
@@ -229,6 +232,8 @@ describe("network helpers", () => {
 
     expect(toRngSeed({ rngSeed: 77 })).toBe(77);
     expect(toRngSeed({ rngSeed: 0 })).toBe(1);
+    expect(toNextTickAtMs({ nextTickAtMs: 12_345 })).toBe(12_345);
+    expect(toNextTickAtMs({ nextTickAtMs: 0 })).toBeNull();
   });
 
   it("estimates wrapped correction distance on the controlled snake head", () => {
@@ -278,6 +283,37 @@ describe("network helpers", () => {
 
     expect(areGameStatesEquivalent(previous, same)).toBe(true);
     expect(areGameStatesEquivalent(previous, changedScore)).toBe(false);
+  });
+
+  it("estimates the server clock offset from a ping exchange", () => {
+    expect(
+      computeServerClockOffsetMs(
+        1_000,
+        1_080,
+        2_040,
+        2_050,
+      ),
+    ).toBe(1_005);
+  });
+
+  it("prefers the aligned next-tick timing over the heuristic fallback", () => {
+    expect(
+      resolveNextTickDelayMs({
+        tickRateMs: 100,
+        fallbackDelayMs: 65,
+        nextTickAtMs: 5_090,
+        estimatedServerNowMs: 5_030,
+      }),
+    ).toBe(60);
+
+    expect(
+      resolveNextTickDelayMs({
+        tickRateMs: 100,
+        fallbackDelayMs: 65,
+        nextTickAtMs: null,
+        estimatedServerNowMs: null,
+      }),
+    ).toBe(65);
   });
 });
 
