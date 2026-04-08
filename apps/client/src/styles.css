@@ -138,6 +138,12 @@ body {
   padding: 0.8rem 0.9rem;
 }
 
+.arena-hud--desktop-immersive {
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.65rem;
+}
+
 .arena-hud__stack {
   display: flex;
   flex-direction: column;
@@ -145,8 +151,19 @@ body {
   min-width: 0;
 }
 
+.arena-hud--desktop-immersive .arena-hud__stack {
+  flex: 1 1 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .arena-hud__stack--end {
   align-items: flex-end;
+}
+
+.arena-hud--desktop-immersive .arena-hud__stack--end {
+  justify-content: flex-end;
 }
 
 .arena-hud__cluster {
@@ -156,8 +173,18 @@ body {
   align-items: center;
 }
 
+.arena-hud--desktop-immersive .arena-hud__cluster,
+.arena-hud--desktop-immersive .arena-hud__scores {
+  gap: 0.35rem;
+}
+
 .arena-hud__cluster--actions {
   justify-content: flex-end;
+}
+
+.arena-hud--desktop-immersive .arena-hud__cluster--actions,
+.arena-hud--desktop-immersive .arena-hud__scores {
+  flex-wrap: nowrap;
 }
 
 .arena-hud__scores {
@@ -200,6 +227,11 @@ body {
   box-shadow: 0 12px 22px rgba(2, 6, 23, 0.2);
 }
 
+.arena-score-pill--compact {
+  min-width: 5.8rem;
+  padding: 0.22rem 0.45rem;
+}
+
 .arena-score-pill--teal {
   border-color: rgba(45, 212, 191, 0.32);
   background: rgba(13, 148, 136, 0.16);
@@ -223,6 +255,41 @@ body {
   font-size: 0.7rem;
   font-weight: 800;
   color: rgba(248, 250, 252, 0.96);
+}
+
+.arena-score-pill--compact .arena-score-pill__title {
+  font-size: 0.48rem;
+  letter-spacing: 0.16em;
+}
+
+.arena-score-pill--compact .arena-score-pill__value {
+  font-size: 0.64rem;
+}
+
+.arena-chip--immersive {
+  padding: 0.26rem 0.55rem;
+  font-size: 0.48rem;
+  letter-spacing: 0.15em;
+}
+
+@media (max-width: 1180px) {
+  .arena-hud--desktop-immersive {
+    align-items: flex-start;
+  }
+
+  .arena-hud--desktop-immersive .arena-hud__stack {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .arena-hud--desktop-immersive .arena-hud__stack--end {
+    align-items: flex-end;
+  }
+
+  .arena-hud--desktop-immersive .arena-hud__scores,
+  .arena-hud--desktop-immersive .arena-hud__cluster--actions {
+    flex-wrap: wrap;
+  }
 }
 
 .countdown-ring {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { destroyLocalGameLoop, useLocalGameStore } from "./game/localGameStore.js";
 import { MenuArenaPreview } from "./components/MenuArenaPreview.js";
@@ -105,13 +105,14 @@ export function App() {
                 : mobileMenu
                   ? "h-[min(50svh,18rem)] min-h-[17rem]"
                   : "h-[min(62vh,32rem)] min-h-[360px] xl:h-[min(66vh,38rem)]";
-  const arenaViewportClass = touchFocusMode
-    ? "aspect-square h-full max-h-full w-full max-w-full"
-    : immersiveDesktopMode
-      ? "aspect-square h-full w-auto max-h-full max-w-full"
-      : desktopGameMode
-        ? "aspect-square h-full w-auto max-h-[42rem] max-w-full"
-        : "aspect-square h-full w-auto max-h-full max-w-full";
+  const desktopInnerClass = desktopGameMode
+    ? `${immersiveDesktopMode ? "max-w-none h-[calc(100svh-1rem)] gap-2" : "max-w-[72rem] h-[calc(100svh-1.5rem)] gap-3"} min-h-0`
+    : null;
+  const desktopHudClass = immersiveDesktopMode
+    ? "glass-panel arena-hud arena-hud--desktop-immersive"
+    : "glass-panel arena-hud";
+  const desktopSectionPaddingClass = immersiveDesktopMode ? "p-1.5 sm:p-2" : "p-2.5 sm:p-3";
+  const constrainedSquareMax = desktopGameMode && !immersiveDesktopMode ? 42 * 16 : null;
   const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
   const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
   const onlineSeatLabel = isOnline && online.ownSnakeId ? online.ownSnakeId.toUpperCase() : null;
@@ -215,7 +216,7 @@ export function App() {
       ref={shellRef}
       className={`app-shell relative overflow-x-hidden text-slate-100 ${
         immersiveDesktopMode
-          ? "px-3 py-3 sm:px-4"
+          ? "px-2 py-2 sm:px-3"
           : desktopGameMode
             ? "px-4 py-3 sm:px-5 lg:px-6"
             : splitTouchLocal
@@ -240,7 +241,7 @@ export function App() {
           touchFocusMode
             ? "h-full max-w-none gap-3"
             : desktopGameMode
-              ? `${immersiveDesktopMode ? "max-w-none" : "max-w-[72rem]"} h-[calc(100svh-1.5rem)] min-h-0 gap-3`
+              ? desktopInnerClass
                 : splitTouchLocal
                   ? "max-w-6xl gap-2 sm:gap-3"
                   : "gap-5"
@@ -282,15 +283,25 @@ export function App() {
         ) : null}
 
         {showDesktopArenaHud ? (
-          <div data-arena-hud="desktop" className="glass-panel arena-hud">
+          <div data-arena-hud="desktop" className={desktopHudClass}>
             <div className="arena-hud__stack">
               <div className="arena-hud__cluster">
-                <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
+                <InfoChip
+                  label={phaseLabel}
+                  accent={isOnline ? "orange" : "teal"}
+                  compact
+                  className={immersiveDesktopMode ? "arena-chip--immersive" : undefined}
+                />
                 {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
                 <InfoChip label={`Session ${sessionScoreLabel}`} compact />
                 {onlineSeatLabel ? <InfoChip label={onlineSeatLabel} compact /> : null}
                 {desktopStatusChip ? (
-                  <InfoChip label={desktopStatusChip} accent="orange" compact />
+                  <InfoChip
+                    label={desktopStatusChip}
+                    accent="orange"
+                    compact
+                    className={immersiveDesktopMode ? "arena-chip--immersive" : undefined}
+                  />
                 ) : null}
               </div>
             </div>
@@ -301,25 +312,27 @@ export function App() {
                   title="J1"
                   value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
                   accent="teal"
+                  compact={immersiveDesktopMode}
                 />
                 <CompactArenaScore
                   title="J2"
                   value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
                   accent="orange"
+                  compact={immersiveDesktopMode}
                 />
               </div>
               <div className="arena-hud__cluster arena-hud__cluster--actions">
                 {canPauseLocal ? (
-                  <ToolbarButton onClick={togglePause}>
+                  <ToolbarButton onClick={togglePause} compact={immersiveDesktopMode}>
                     {paused ? "Reprendre" : "Pause"}
                   </ToolbarButton>
                 ) : null}
                 {fullscreen.supported ? (
-                  <ToolbarButton onClick={handleToggleFullscreen}>
+                  <ToolbarButton onClick={handleToggleFullscreen} compact={immersiveDesktopMode}>
                     {fullscreen.active ? "Quitter plein ecran" : "Plein ecran"}
                   </ToolbarButton>
                 ) : null}
-                <ToolbarButton onClick={returnToMenu}>
+                <ToolbarButton onClick={returnToMenu} compact={immersiveDesktopMode}>
                   {isOnline ? "Quitter" : "Menu"}
                 </ToolbarButton>
               </div>
@@ -356,30 +369,31 @@ export function App() {
             touchFocusMode
               ? "flex-1 min-h-0 p-2 sm:p-3"
               : desktopGameMode
-                ? "p-2.5 sm:p-3"
+                ? desktopSectionPaddingClass
                 : splitTouchLocal
                   ? "p-2 sm:p-3"
                   : "p-3 sm:p-4"
           } ${arenaSizeClass}`}
         >
           <div className="relative h-full w-full overflow-hidden rounded-[1.35rem] border border-slate-700/60 bg-[#020611]/78">
-            <div className={`h-full w-full ${desktopGameMode || touchFocusMode ? "grid place-items-center" : ""}`}>
-              <div className={desktopGameMode || touchMode ? arenaViewportClass : "h-full w-full"}>
-                {shouldRenderPhaser ? (
-                  <Suspense
-                    fallback={
-                      <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
-                        Chargement du rendu Phaser...
-                      </div>
-                    }
-                  >
-                    <PhaserViewport />
-                  </Suspense>
-                ) : (
-                  <MenuArenaPreview />
-                )}
-              </div>
-            </div>
+            <SquareArenaFrame
+              enabled={desktopGameMode || Boolean(touchMode)}
+              maxSquareSize={constrainedSquareMax}
+            >
+              {shouldRenderPhaser ? (
+                <Suspense
+                  fallback={
+                    <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
+                      Chargement du rendu Phaser...
+                    </div>
+                  }
+                >
+                  <PhaserViewport />
+                </Suspense>
+              ) : (
+                <MenuArenaPreview />
+              )}
+            </SquareArenaFrame>
 
             {isMenu ? (
               <motion.div
@@ -606,7 +620,7 @@ interface InfoChipProps {
   readonly label: string;
   readonly accent?: "teal" | "orange" | "slate";
   readonly compact?: boolean;
-  readonly className?: string;
+  readonly className?: string | undefined;
 }
 
 function InfoChip({ label, accent = "slate", compact = false, className }: InfoChipProps) {
@@ -631,13 +645,16 @@ function InfoChip({ label, accent = "slate", compact = false, className }: InfoC
 interface ToolbarButtonProps {
   readonly children: string;
   readonly onClick: () => void;
+  readonly compact?: boolean;
 }
 
-function ToolbarButton({ children, onClick }: ToolbarButtonProps) {
+function ToolbarButton({ children, onClick, compact = false }: ToolbarButtonProps) {
   return (
     <button
       type="button"
-      className="min-h-[2.45rem] rounded-full border border-slate-500/40 bg-slate-950/78 px-3 py-2 text-[11px] font-semibold text-slate-100 transition hover:border-cyan-300/40 hover:bg-slate-900/85"
+      className={`rounded-full border border-slate-500/40 bg-slate-950/78 font-semibold text-slate-100 transition hover:border-cyan-300/40 hover:bg-slate-900/85 ${
+        compact ? "min-h-[2rem] px-2.5 py-1.5 text-[10px]" : "min-h-[2.45rem] px-3 py-2 text-[11px]"
+      }`}
       onClick={onClick}
     >
       {children}
@@ -649,13 +666,95 @@ interface CompactArenaScoreProps {
   readonly title: string;
   readonly value: string;
   readonly accent: "teal" | "orange";
+  readonly compact?: boolean;
 }
 
-function CompactArenaScore({ title, value, accent }: CompactArenaScoreProps) {
+function CompactArenaScore({ title, value, accent, compact = false }: CompactArenaScoreProps) {
   return (
-    <div className={`arena-score-pill arena-score-pill--${accent}`}>
+    <div className={`arena-score-pill arena-score-pill--${accent} ${compact ? "arena-score-pill--compact" : ""}`}>
       <span className="arena-score-pill__title">{title}</span>
       <span className="arena-score-pill__value">{value}</span>
+    </div>
+  );
+}
+
+interface SquareArenaFrameProps {
+  readonly enabled: boolean;
+  readonly children: ReactNode;
+  readonly maxSquareSize?: number | null;
+}
+
+function SquareArenaFrame({
+  enabled,
+  children,
+  maxSquareSize = null,
+}: SquareArenaFrameProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [squareSize, setSquareSize] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setSquareSize(null);
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    let frameHandle = 0;
+    const syncSquareSize = () => {
+      frameHandle = 0;
+      const measuredSize = Math.max(1, Math.floor(Math.min(container.clientWidth, container.clientHeight)));
+      const nextSize = maxSquareSize ? Math.min(measuredSize, maxSquareSize) : measuredSize;
+      setSquareSize((current) => (current === nextSize ? current : nextSize));
+    };
+    const queueResize = () => {
+      if (frameHandle) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+      frameHandle = window.requestAnimationFrame(syncSquareSize);
+    };
+
+    const resizeObserver = new ResizeObserver(() => queueResize());
+    const visualViewport = window.visualViewport ?? null;
+
+    resizeObserver.observe(container);
+    window.addEventListener("resize", queueResize);
+    window.addEventListener("orientationchange", queueResize);
+    visualViewport?.addEventListener("resize", queueResize);
+    document.addEventListener("fullscreenchange", queueResize);
+    document.addEventListener("webkitfullscreenchange", queueResize as EventListener);
+    syncSquareSize();
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", queueResize);
+      window.removeEventListener("orientationchange", queueResize);
+      visualViewport?.removeEventListener("resize", queueResize);
+      document.removeEventListener("fullscreenchange", queueResize);
+      document.removeEventListener("webkitfullscreenchange", queueResize as EventListener);
+      if (frameHandle) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+    };
+  }, [enabled, maxSquareSize]);
+
+  return (
+    <div ref={containerRef} className={`h-full w-full ${enabled ? "grid place-items-center" : ""}`}>
+      <div
+        className={enabled ? "max-h-full max-w-full" : "h-full w-full"}
+        style={
+          enabled
+            ? squareSize
+              ? { width: `${squareSize}px`, height: `${squareSize}px` }
+              : { width: "0px", height: "0px" }
+            : undefined
+        }
+      >
+        {children}
+      </div>
     </div>
   );
 }
