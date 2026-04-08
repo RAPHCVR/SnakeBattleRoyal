@@ -86,13 +86,24 @@ export class SnakeArenaScene extends Phaser.Scene {
 
     this.renderVersion = storeState.renderVersion;
     const state = storeState.gameState;
+    const ownSnakeId = storeState.mode === "online" ? storeState.online.ownSnakeId : null;
     const transition = storeState.transition;
     const previous = transition?.previous;
     const transitionDurationMs = Math.max(1, transition?.durationMs ?? state.config.tickRateMs);
+    const remoteTransitionDurationMs =
+      storeState.mode === "online" ? state.config.tickRateMs : transitionDurationMs;
     const snapPositions = force || this.snapNextRender;
 
     this.syncFood(state, previous, layout, snapPositions);
-    this.syncSnakes(state, previous, layout, snapPositions, transitionDurationMs);
+    this.syncSnakes(
+      state,
+      previous,
+      layout,
+      snapPositions,
+      transitionDurationMs,
+      remoteTransitionDurationMs,
+      ownSnakeId,
+    );
     this.snapNextRender = false;
 
     if (!force && transition?.foodEatenAt) {
@@ -184,6 +195,8 @@ export class SnakeArenaScene extends Phaser.Scene {
     layout: ArenaBoardLayout,
     snapPositions: boolean,
     transitionDurationMs: number,
+    remoteTransitionDurationMs: number,
+    ownSnakeId: SnakeState["id"] | null,
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
@@ -220,6 +233,8 @@ export class SnakeArenaScene extends Phaser.Scene {
 
         const wrapTweenPlan = computeWrapTweenPlan(layout, from, segment);
         if (wrapTweenPlan) {
+          const snakeTransitionDurationMs =
+            ownSnakeId && snake.id !== ownSnakeId ? remoteTransitionDurationMs : transitionDurationMs;
           const ghost = this.ensureWrapGhostNode(ghostKey, snake, index, visualAlive, layout);
           activeGhostKeys.add(ghostKey);
           this.tweens.killTweensOf(ghost);
@@ -230,14 +245,14 @@ export class SnakeArenaScene extends Phaser.Scene {
             targets: node,
             x: wrapTweenPlan.primaryTarget.x,
             y: wrapTweenPlan.primaryTarget.y,
-            duration: transitionDurationMs,
+            duration: snakeTransitionDurationMs,
             ease: "Linear",
           });
           this.tweens.add({
             targets: ghost,
             x: wrapTweenPlan.ghostTarget.x,
             y: wrapTweenPlan.ghostTarget.y,
-            duration: transitionDurationMs,
+            duration: snakeTransitionDurationMs,
             ease: "Linear",
             onComplete: () => {
               const activeGhost = this.wrapGhosts.get(ghostKey);
@@ -251,11 +266,13 @@ export class SnakeArenaScene extends Phaser.Scene {
         }
 
         this.clearWrapGhost(ghostKey);
+        const snakeTransitionDurationMs =
+          ownSnakeId && snake.id !== ownSnakeId ? remoteTransitionDurationMs : transitionDurationMs;
         this.tweens.add({
           targets: node,
           x: target.x,
           y: target.y,
-          duration: transitionDurationMs,
+          duration: snakeTransitionDurationMs,
           ease: "Linear",
         });
       }

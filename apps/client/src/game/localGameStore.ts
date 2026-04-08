@@ -16,6 +16,7 @@ import {
 } from "@snake-duel/shared";
 import { create } from "zustand";
 import {
+  areGameStatesEquivalent,
   areControlledSnakesEquivalent,
   type ClockOffsetSample,
   computeServerClockOffsetMs,
@@ -1203,6 +1204,21 @@ async function startOnlineMatchmaking(
           onlinePredictionRuntime && onlinePredictionRuntime.tick >= tick
             ? onlinePredictionRuntime
             : matchingPredictedRuntime;
+        const displayGame = mergeControlledSnake(
+          nextGame,
+          preservedRuntime.game,
+          currentStore.online.ownSnakeId,
+        );
+        const shouldRefreshDisplay = !areGameStatesEquivalent(previousGame, displayGame);
+        const transition = shouldRefreshDisplay
+          ? computeTransition(
+              previousGame,
+              displayGame,
+              Math.max(previousDisplayTick, tick),
+              tickEvent,
+              nextGame.config.tickRateMs,
+            )
+          : null;
 
         onlinePredictionRuntime = preservedRuntime;
         prunePredictedHistory(tick);
@@ -1223,6 +1239,9 @@ async function startOnlineMatchmaking(
           return {
             ...state,
             mode: "online",
+            gameState: shouldRefreshDisplay ? displayGame : state.gameState,
+            transition,
+            renderVersion: shouldRefreshDisplay ? state.renderVersion + 1 : state.renderVersion,
             session: toSessionSummary(networkState),
             countdown: countdownActive
               ? createCountdownState({
@@ -1249,6 +1268,9 @@ async function startOnlineMatchmaking(
             }),
           };
         });
+        if (transition) {
+          scheduleTransitionClear(setState, transition);
+        }
 
         if (nextGame.status === "running") {
           scheduleOnlinePredictionStep(
