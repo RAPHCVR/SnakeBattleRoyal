@@ -16,12 +16,16 @@ import {
 } from "@snake-duel/shared";
 import { create } from "zustand";
 import {
-  areGameStatesEquivalent,
+  areControlledSnakesEquivalent,
+  type ClockOffsetSample,
   computeServerClockOffsetMs,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
-  resolveNextTickDelayMs,
+  mergeControlledSnake,
+  resolvePredictionLeadLimit,
+  resolvePredictionStepDelayMs,
+  selectStableClockOffsetMs,
   toNetworkQuality,
   toNextTickAtMs,
   toProcessedInputSequences,
@@ -127,13 +131,15 @@ function resolveColyseusUrl(): string {
 
 const COLYSEUS_URL = resolveColyseusUrl();
 const ONLINE_INPUT_BUFFER_SIZE = 3;
-const ONLINE_PING_INTERVAL_MS = 2_000;
+const ONLINE_PING_INTERVAL_MS = 1_000;
 const ONLINE_LATENCY_EWMA_ALPHA = 0.25;
 const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_OFFSET_EWMA_ALPHA = 0.2;
+const ONLINE_CLOCK_SAMPLE_LIMIT = 8;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 1;
 const ONLINE_PREDICTION_SPIN_THRESHOLD_MS = 12;
-const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
+const ONLINE_PREDICTION_HISTORY_LIMIT = 8;
+const ONLINE_MIN_AUTHORITATIVE_TRANSITION_RATIO = 0.72;
 const ROUND_START_COUNTDOWN_MS = 3_000;
 
 let localLoopHandle: number | null = null;
@@ -150,6 +156,7 @@ let onlinePredictionDueAtMs: number | null = null;
 let onlinePredictionAnimationFrameHandle: number | null = null;
 let onlinePingIntervalHandle: number | null = null;
 let onlinePredictionRuntime: EngineRuntime | null = null;
+let onlinePredictedHistory: EngineRuntime[] = [];
 let onlineAuthoritativeState: GameState | null = null;
 let onlineAuthoritativeTick = 0;
 let onlineNextTickAtMs: number | null = null;
@@ -163,6 +170,7 @@ let onlineLatencyMs: number | null = null;
 let onlineJitterMs: number | null = null;
 let onlineLastRttSampleMs: number | null = null;
 let onlineClockOffsetMs: number | null = null;
+let onlineClockSamples: ClockOffsetSample[] = [];
 let onlineCorrectionCount = 0;
 let onlineLastCorrectionDistance = 0;
 
@@ -388,6 +396,7 @@ function resetOnlineRuntimeState(): void {
   stopOnlinePredictionLoop();
   stopOnlinePingLoop();
   onlinePredictionRuntime = null;
+  onlinePredictedHistory = [];
   onlineAuthoritativeState = null;
   onlineAuthoritativeTick = 0;
   onlineNextTickAtMs = null;
@@ -400,6 +409,7 @@ function resetOnlineRuntimeState(): void {
   onlineJitterMs = null;
   onlineLastRttSampleMs = null;
   onlineClockOffsetMs = null;
+  onlineClockSamples = [];
   onlineCorrectionCount = 0;
   onlineLastCorrectionDistance = 0;
 }
@@ -476,15 +486,35 @@ function updateOnlineNetworkMetrics(sampleRttMs: number): void {
   onlineLastRttSampleMs = sampleRttMs;
 }
 
-function updateOnlineClockOffset(sampleOffsetMs: number | null): void {
-  if (sampleOffsetMs === null || !Number.isFinite(sampleOffsetMs)) {
+function recordOnlineClockSample(sampleOffsetMs: number | null, sampleRttMs: number): void {
+  if (
+    sampleOffsetMs === null ||
+    !Number.isFinite(sampleOffsetMs) ||
+    !Number.isFinite(sampleRttMs) ||
+    sampleRttMs < 0
+  ) {
+    return;
+  }
+
+  onlineClockSamples = [
+    ...onlineClockSamples,
+    {
+      offsetMs: sampleOffsetMs,
+      rttMs: sampleRttMs,
+      receivedAtMs: Date.now(),
+    },
+  ].slice(-ONLINE_CLOCK_SAMPLE_LIMIT);
+
+  const stableOffsetMs = selectStableClockOffsetMs(onlineClockSamples);
+  if (stableOffsetMs === null) {
     return;
   }
 
   if (onlineClockOffsetMs === null) {
-    onlineClockOffsetMs = sampleOffsetMs;
+    onlineClockOffsetMs = stableOffsetMs;
   } else {
-    onlineClockOffsetMs += (sampleOffsetMs - onlineClockOffsetMs) * ONLINE_CLOCK_OFFSET_EWMA_ALPHA;
+    onlineClockOffsetMs +=
+      (stableOffsetMs - onlineClockOffsetMs) * ONLINE_CLOCK_OFFSET_EWMA_ALPHA;
   }
 }
 
@@ -505,12 +535,23 @@ function computeHeuristicPredictionDelayMs(tickRateMs: number): number {
   return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, Math.round(estimatedDelay)));
 }
 
-function computeOnlineTickDelayMs(tickRateMs: number): number {
-  return resolveNextTickDelayMs({
+function getPredictionLeadLimit(): number {
+  return resolvePredictionLeadLimit({
+    latencyMs: onlineLatencyMs,
+    jitterMs: onlineJitterMs,
+  });
+}
+
+function computeOnlinePredictionDelayMs(
+  tickRateMs: number,
+  currentPredictionTick = onlinePredictionRuntime?.tick ?? onlineAuthoritativeTick,
+): number {
+  return resolvePredictionStepDelayMs({
     tickRateMs,
     fallbackDelayMs: computeHeuristicPredictionDelayMs(tickRateMs),
     nextTickAtMs: onlineNextTickAtMs,
     estimatedServerNowMs: getEstimatedServerNowMs(),
+    predictionLeadTicks: Math.max(0, currentPredictionTick - onlineAuthoritativeTick),
   });
 }
 
@@ -532,19 +573,10 @@ function computeAuthoritativeTransitionDurationMs(
     return computeCorrectionTransitionDurationMs(tickRateMs);
   }
 
-  return computeOnlineTickDelayMs(tickRateMs);
-}
-
-function shouldKeepPredictedDisplayState(
-  previousGame: GameState,
-  nextGame: GameState,
-  previousDisplayTick: number,
-  nextTick: number,
-  ownSnakeId: SnakeId | null,
-): boolean {
-  return Boolean(ownSnakeId) &&
-    previousDisplayTick === nextTick &&
-    areGameStatesEquivalent(previousGame, nextGame);
+  return Math.max(
+    Math.round(tickRateMs * ONLINE_MIN_AUTHORITATIVE_TRANSITION_RATIO),
+    computeOnlinePredictionDelayMs(tickRateMs, onlineAuthoritativeTick),
+  );
 }
 
 function getOwnProcessedSequence(
@@ -585,6 +617,66 @@ function getOnlineNetworkSnapshot(
     lastCorrectionDistance: onlineLastCorrectionDistance,
     predictionLeadTicks: getPredictionLeadTicks(displayTick, authoritativeTick),
   });
+}
+
+function resetPredictedHistory(runtime: EngineRuntime): void {
+  onlinePredictedHistory = [runtime];
+}
+
+function recordPredictedRuntime(runtime: EngineRuntime): void {
+  const nextHistory = onlinePredictedHistory.filter(
+    (sample) => sample.tick !== runtime.tick && sample.tick > onlineAuthoritativeTick,
+  );
+  nextHistory.push(runtime);
+  nextHistory.sort((a, b) => a.tick - b.tick);
+  onlinePredictedHistory = nextHistory.slice(-ONLINE_PREDICTION_HISTORY_LIMIT);
+}
+
+function prunePredictedHistory(authoritativeTick: number): void {
+  onlinePredictedHistory = onlinePredictedHistory
+    .filter((sample) => sample.tick > authoritativeTick)
+    .slice(-ONLINE_PREDICTION_HISTORY_LIMIT);
+}
+
+function findMatchingPredictedRuntime(
+  targetTick: number,
+  authoritativeGame: GameState,
+  ownSnakeId: SnakeId | null,
+): EngineRuntime | null {
+  for (let index = onlinePredictedHistory.length - 1; index >= 0; index -= 1) {
+    const runtime = onlinePredictedHistory[index];
+    if (!runtime) {
+      continue;
+    }
+
+    if (runtime.tick < targetTick) {
+      break;
+    }
+
+    if (
+      runtime.tick === targetTick &&
+      areControlledSnakesEquivalent(authoritativeGame, runtime.game, ownSnakeId)
+    ) {
+      return runtime;
+    }
+  }
+
+  return null;
+}
+
+function pruneAcknowledgedPendingInputs(
+  ownSnakeId: SnakeId | null,
+  processedInputs: ProcessedInputSequences,
+): void {
+  if (!ownSnakeId) {
+    onlinePendingInputs = [];
+    return;
+  }
+
+  const acknowledgedSequence = getOwnProcessedSequence(ownSnakeId, processedInputs);
+  onlinePendingInputs = onlinePendingInputs.filter(
+    (pendingInput) => pendingInput.sequence > acknowledgedSequence,
+  );
 }
 
 function rebuildOnlinePredictionRuntime(ownSnakeId: SnakeId | null): EngineRuntime | null {
@@ -643,7 +735,7 @@ function scheduleOnlinePredictionStep(
     return;
   }
 
-  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + ONLINE_MAX_PREDICTION_LEAD_TICKS) {
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit()) {
     stopOnlinePredictionLoop();
     return;
   }
@@ -697,7 +789,7 @@ function runOnlinePredictionStep(
     return false;
   }
 
-  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + ONLINE_MAX_PREDICTION_LEAD_TICKS) {
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit()) {
     return false;
   }
 
@@ -708,9 +800,15 @@ function runOnlinePredictionStep(
   }
 
   onlinePredictionRuntime = nextRuntime;
+  recordPredictedRuntime(nextRuntime);
+  const displayGame = mergeControlledSnake(
+    onlineAuthoritativeState ?? state.gameState,
+    nextRuntime.game,
+    state.online.ownSnakeId,
+  );
   const transition = computeTransition(
     state.gameState,
-    nextRuntime.game,
+    displayGame,
     nextRuntime.tick,
     nextRuntime.lastTickEvent,
     nextRuntime.game.config.tickRateMs,
@@ -718,7 +816,7 @@ function runOnlinePredictionStep(
 
   setState((store) => ({
     ...store,
-    gameState: nextRuntime.game,
+    gameState: displayGame,
     transition,
     renderVersion: store.renderVersion + 1,
     online: createOnlineSessionState({
@@ -728,6 +826,14 @@ function runOnlinePredictionStep(
     }),
   }));
   scheduleTransitionClear(setState, transition);
+
+  if (nextRuntime.game.status === "running") {
+    scheduleOnlinePredictionStep(
+      setState,
+      computeOnlinePredictionDelayMs(nextRuntime.game.config.tickRateMs, nextRuntime.tick),
+    );
+  }
+
   return true;
 }
 
@@ -888,6 +994,7 @@ async function startOnlineMatchmaking(
       const rebuiltRuntime = rebuildOnlinePredictionRuntime(seat);
       if (rebuiltRuntime) {
         onlinePredictionRuntime = rebuiltRuntime;
+        resetPredictedHistory(rebuiltRuntime);
       }
 
       setState((state) => ({
@@ -916,6 +1023,7 @@ async function startOnlineMatchmaking(
       const rebuiltRuntime = rebuildOnlinePredictionRuntime(ownSnakeId);
       if (rebuiltRuntime) {
         onlinePredictionRuntime = rebuiltRuntime;
+        resetPredictedHistory(rebuiltRuntime);
       }
 
       setState((state) => ({
@@ -943,14 +1051,16 @@ async function startOnlineMatchmaking(
       }
 
       onlineOutstandingPings.delete(nonce);
-      updateOnlineNetworkMetrics(Math.max(0, performance.now() - pendingPing.perfSentAtMs));
-      updateOnlineClockOffset(
+      const sampleRttMs = Math.max(0, performance.now() - pendingPing.perfSentAtMs);
+      updateOnlineNetworkMetrics(sampleRttMs);
+      recordOnlineClockSample(
         computeServerClockOffsetMs(
           pendingPing.wallSentAtMs,
           Date.now(),
           toFiniteNumber(payload?.serverReceivedAtMs, 0),
           toFiniteNumber(payload?.serverSentAtMs, 0),
         ),
+        sampleRttMs,
       );
 
       setState((state) => ({
@@ -989,33 +1099,25 @@ async function startOnlineMatchmaking(
         connectedPlayers === 2 &&
         countdownEndsAtMs > Date.now() &&
         countdownDurationMs > 0;
+      const matchingPredictedRuntime = currentStore.online.ownSnakeId
+        ? findMatchingPredictedRuntime(tick, nextGame, currentStore.online.ownSnakeId)
+        : null;
 
       onlineAuthoritativeState = nextGame;
       onlineAuthoritativeTick = tick;
       onlineNextTickAtMs = nextTickAtMs;
       onlineAuthoritativeProcessedInputs = processedInputs;
       onlineAuthoritativeRngSeed = rngSeed;
+      pruneAcknowledgedPendingInputs(currentStore.online.ownSnakeId, processedInputs);
 
-      const rebuiltRuntime = rebuildOnlinePredictionRuntime(currentStore.online.ownSnakeId);
-      const runtime =
-        rebuiltRuntime ??
-        createRuntimeFromGameState(nextGame, {
-          tick,
-          processedInputSequences: processedInputs,
-          rngSeed,
-        });
+      if (matchingPredictedRuntime && previousDisplayTick >= tick) {
+        const preservedRuntime =
+          onlinePredictionRuntime && onlinePredictionRuntime.tick >= tick
+            ? onlinePredictionRuntime
+            : matchingPredictedRuntime;
 
-      onlinePredictionRuntime = runtime;
-
-      const keepPredictedDisplayState = shouldKeepPredictedDisplayState(
-        previousGame,
-        runtime.game,
-        previousDisplayTick,
-        runtime.tick,
-        currentStore.online.ownSnakeId,
-      );
-
-      if (keepPredictedDisplayState) {
+        onlinePredictionRuntime = preservedRuntime;
+        prunePredictedHistory(tick);
         onlineLastCorrectionDistance = 0;
 
         setState((state) => {
@@ -1054,25 +1156,41 @@ async function startOnlineMatchmaking(
               waitingOpponentRematch,
               lastError: null,
               authoritativeTick: tick,
-              displayTick: runtime.tick,
-              network: getOnlineNetworkSnapshot(ownId, runtime.tick, tick),
+              displayTick: state.online.displayTick,
+              network: getOnlineNetworkSnapshot(ownId, state.online.displayTick, tick),
             }),
           };
         });
 
         if (nextGame.status === "running") {
-          scheduleOnlinePredictionStep(setState, computeOnlineTickDelayMs(nextGame.config.tickRateMs));
+          scheduleOnlinePredictionStep(
+            setState,
+            computeOnlinePredictionDelayMs(nextGame.config.tickRateMs, preservedRuntime.tick),
+          );
         } else {
           stopOnlinePredictionLoop();
         }
         return;
       }
 
+      const rebuiltRuntime = rebuildOnlinePredictionRuntime(currentStore.online.ownSnakeId);
+      const runtime =
+        rebuiltRuntime ??
+        createRuntimeFromGameState(nextGame, {
+          tick,
+          processedInputSequences: processedInputs,
+          rngSeed,
+        });
+      const displayGame = mergeControlledSnake(nextGame, runtime.game, currentStore.online.ownSnakeId);
+
+      onlinePredictionRuntime = runtime;
+      resetPredictedHistory(runtime);
+
       const correctionActive =
         Boolean(currentStore.online.ownSnakeId) && previousDisplayTick >= tick;
       const correctionDistance =
         currentStore.online.ownSnakeId && correctionActive
-          ? estimateSnakeHeadCorrection(previousGame, runtime.game, currentStore.online.ownSnakeId)
+          ? estimateSnakeHeadCorrection(previousGame, displayGame, currentStore.online.ownSnakeId)
           : 0;
 
       onlineLastCorrectionDistance = correctionDistance;
@@ -1082,7 +1200,7 @@ async function startOnlineMatchmaking(
 
       const transition = computeTransition(
         previousGame,
-        runtime.game,
+        displayGame,
         runtime.tick,
         tickEvent,
         computeAuthoritativeTransitionDurationMs(
@@ -1108,7 +1226,7 @@ async function startOnlineMatchmaking(
         return {
           ...state,
           mode: "online",
-          gameState: runtime.game,
+          gameState: displayGame,
           transition,
           renderVersion: state.renderVersion + 1,
           session: toSessionSummary(networkState),
@@ -1140,7 +1258,10 @@ async function startOnlineMatchmaking(
       scheduleTransitionClear(setState, transition);
 
       if (nextGame.status === "running") {
-        scheduleOnlinePredictionStep(setState, computeOnlineTickDelayMs(nextGame.config.tickRateMs));
+        scheduleOnlinePredictionStep(
+          setState,
+          computeOnlinePredictionDelayMs(nextGame.config.tickRateMs, runtime.tick),
+        );
       } else {
         stopOnlinePredictionLoop();
       }
@@ -1393,7 +1514,13 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       }));
 
       if (onlinePredictionTimeoutHandle === null) {
-        scheduleOnlinePredictionStep(set, computeOnlineTickDelayMs(state.gameState.config.tickRateMs));
+        scheduleOnlinePredictionStep(
+          set,
+          computeOnlinePredictionDelayMs(
+            state.gameState.config.tickRateMs,
+            onlinePredictionRuntime?.tick ?? onlineAuthoritativeTick,
+          ),
+        );
       }
       return true;
     },
@@ -1463,6 +1590,13 @@ function renderGameToText(): string {
       displayTick: state.online.displayTick,
       network: state.online.network,
     },
+    transition: state.transition
+      ? {
+          tick: state.transition.tick,
+          durationMs: state.transition.durationMs,
+          fatalCollision: state.transition.fatalCollision,
+        }
+      : null,
     countdown: state.countdown,
     automation: {
       manualTimeControl: localManualTimeControl,

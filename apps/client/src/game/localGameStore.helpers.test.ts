@@ -1,12 +1,17 @@
 import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState, type TickEvent } from "@snake-duel/shared";
 import { describe, expect, it } from "vitest";
 import {
+  areControlledSnakesEquivalent,
   areGameStatesEquivalent,
   computeServerClockOffsetMs,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
+  mergeControlledSnake,
+  resolvePredictionLeadLimit,
+  resolvePredictionStepDelayMs,
   resolveNextTickDelayMs,
+  selectStableClockOffsetMs,
   toSessionSummary,
   toNetworkQuality,
   toNextTickAtMs,
@@ -263,6 +268,100 @@ describe("network helpers", () => {
     expect(estimateSnakeHeadCorrection(previous, next, "player1")).toBe(1);
   });
 
+  it("merges only the locally controlled snake into the display state", () => {
+    const authoritative = createGameState({
+      snakes: [
+        createSnake("player1"),
+        createSnake("player2", {
+          body: [
+            { x: 8, y: 8 },
+            { x: 9, y: 8 },
+          ],
+        }),
+      ],
+    });
+    const predicted = createGameState({
+      snakes: [
+        createSnake("player1", {
+          direction: "up",
+          body: [
+            { x: 2, y: 1 },
+            { x: 2, y: 2 },
+          ],
+        }),
+        createSnake("player2", {
+          direction: "down",
+          body: [
+            { x: 8, y: 7 },
+            { x: 8, y: 8 },
+          ],
+        }),
+      ],
+    });
+
+    expect(mergeControlledSnake(authoritative, predicted, "player1")).toEqual({
+      ...authoritative,
+      snakes: [
+        {
+          id: "player1",
+          alive: true,
+          direction: "up",
+          score: 0,
+          body: [
+            { x: 2, y: 1 },
+            { x: 2, y: 2 },
+          ],
+        },
+        {
+          id: "player2",
+          alive: true,
+          direction: "left",
+          score: 0,
+          body: [
+            { x: 8, y: 8 },
+            { x: 9, y: 8 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("compares predicted state fidelity on the controlled snake only", () => {
+    const authoritative = createGameState({
+      snakes: [
+        createSnake("player1", {
+          direction: "up",
+          body: [
+            { x: 2, y: 1 },
+            { x: 2, y: 2 },
+          ],
+        }),
+        createSnake("player2", {
+          direction: "down",
+          body: [
+            { x: 8, y: 7 },
+            { x: 8, y: 8 },
+          ],
+        }),
+      ],
+    });
+    const sameLocalSnake = createGameState({
+      snakes: [
+        createSnake("player1", {
+          direction: "up",
+          body: [
+            { x: 2, y: 1 },
+            { x: 2, y: 2 },
+          ],
+        }),
+        createSnake("player2"),
+      ],
+    });
+
+    expect(areControlledSnakesEquivalent(authoritative, sameLocalSnake, "player1")).toBe(true);
+    expect(areControlledSnakesEquivalent(authoritative, sameLocalSnake, "player2")).toBe(false);
+  });
+
   it("maps latency and jitter bands to a stable network quality label", () => {
     expect(toNetworkQuality(null, null)).toBe("unknown");
     expect(toNetworkQuality(30, 4)).toBe("excellent");
@@ -314,6 +413,35 @@ describe("network helpers", () => {
         estimatedServerNowMs: null,
       }),
     ).toBe(65);
+  });
+
+  it("offsets future prediction steps by the current prediction lead", () => {
+    expect(
+      resolvePredictionStepDelayMs({
+        tickRateMs: 100,
+        fallbackDelayMs: 65,
+        nextTickAtMs: 5_090,
+        estimatedServerNowMs: 5_105,
+        predictionLeadTicks: 1,
+      }),
+    ).toBe(85);
+  });
+
+  it("keeps two ticks of headroom across network conditions", () => {
+    expect(resolvePredictionLeadLimit({ latencyMs: null, jitterMs: null })).toBe(2);
+    expect(resolvePredictionLeadLimit({ latencyMs: 70, jitterMs: 10 })).toBe(2);
+    expect(resolvePredictionLeadLimit({ latencyMs: 140, jitterMs: 12 })).toBe(2);
+    expect(resolvePredictionLeadLimit({ latencyMs: 80, jitterMs: 30 })).toBe(2);
+  });
+
+  it("prefers the lowest-rtt recent clock sample", () => {
+    expect(
+      selectStableClockOffsetMs([
+        { offsetMs: 990, rttMs: 48, receivedAtMs: 1_000 },
+        { offsetMs: 1_010, rttMs: 18, receivedAtMs: 1_100 },
+        { offsetMs: 1_004, rttMs: 18, receivedAtMs: 1_200 },
+      ]),
+    ).toBe(1_004);
   });
 });
 

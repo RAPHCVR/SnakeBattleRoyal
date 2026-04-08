@@ -27,6 +27,12 @@ export interface SessionSummary {
 
 export type NetworkQuality = "unknown" | "excellent" | "good" | "fair" | "poor";
 
+export interface ClockOffsetSample {
+  readonly offsetMs: number;
+  readonly rttMs: number;
+  readonly receivedAtMs: number;
+}
+
 type AnyRecord = Record<string, unknown>;
 
 export function createSessionSummary(
@@ -184,6 +190,70 @@ export function resolveNextTickDelayMs({
   return clampTickDelayMs(sourceDelayMs, tickRateMs);
 }
 
+export function resolvePredictionStepDelayMs({
+  tickRateMs,
+  fallbackDelayMs,
+  nextTickAtMs,
+  estimatedServerNowMs,
+  predictionLeadTicks,
+}: {
+  readonly tickRateMs: number;
+  readonly fallbackDelayMs: number;
+  readonly nextTickAtMs: number | null;
+  readonly estimatedServerNowMs: number | null;
+  readonly predictionLeadTicks: number;
+}): number {
+  const alignedNextTickAtMs =
+    nextTickAtMs === null
+      ? null
+      : nextTickAtMs + Math.max(0, predictionLeadTicks) * tickRateMs;
+
+  return resolveNextTickDelayMs({
+    tickRateMs,
+    fallbackDelayMs,
+    nextTickAtMs: alignedNextTickAtMs,
+    estimatedServerNowMs,
+  });
+}
+
+export function resolvePredictionLeadLimit({
+  latencyMs,
+  jitterMs,
+}: {
+  readonly latencyMs: number | null;
+  readonly jitterMs: number | null;
+}): number {
+  return 2;
+}
+
+export function selectStableClockOffsetMs(
+  samples: readonly ClockOffsetSample[],
+): number | null {
+  let bestSample: ClockOffsetSample | null = null;
+
+  for (const sample of samples) {
+    if (
+      !Number.isFinite(sample.offsetMs) ||
+      !Number.isFinite(sample.rttMs) ||
+      !Number.isFinite(sample.receivedAtMs) ||
+      sample.rttMs < 0
+    ) {
+      continue;
+    }
+
+    if (
+      !bestSample ||
+      sample.rttMs < bestSample.rttMs - 0.5 ||
+      (Math.abs(sample.rttMs - bestSample.rttMs) <= 0.5 &&
+        sample.receivedAtMs > bestSample.receivedAtMs)
+    ) {
+      bestSample = sample;
+    }
+  }
+
+  return bestSample?.offsetMs ?? null;
+}
+
 export function estimateSnakeHeadCorrection(
   previous: GameState,
   next: GameState,
@@ -204,6 +274,46 @@ export function estimateSnakeHeadCorrection(
   const wrappedDy = Math.min(dy, Math.max(0, previous.config.height - dy));
 
   return wrappedDx + wrappedDy;
+}
+
+export function mergeControlledSnake(
+  authoritative: GameState,
+  predicted: GameState,
+  snakeId: SnakeId | null,
+): GameState {
+  if (!snakeId || authoritative.status !== "running") {
+    return authoritative;
+  }
+
+  const predictedSnake = predicted.snakes.find((snake) => snake.id === snakeId);
+  if (!predictedSnake) {
+    return authoritative;
+  }
+
+  return {
+    ...authoritative,
+    snakes: authoritative.snakes.map((snake) =>
+      snake.id === snakeId ? cloneSnakeState(predictedSnake) : cloneSnakeState(snake)
+    ),
+  };
+}
+
+export function areControlledSnakesEquivalent(
+  authoritative: GameState,
+  predicted: GameState,
+  snakeId: SnakeId | null,
+): boolean {
+  if (!snakeId) {
+    return false;
+  }
+
+  const authoritativeSnake = authoritative.snakes.find((snake) => snake.id === snakeId);
+  const predictedSnake = predicted.snakes.find((snake) => snake.id === snakeId);
+  if (!authoritativeSnake || !predictedSnake) {
+    return false;
+  }
+
+  return areSnakesEquivalent(authoritativeSnake, predictedSnake);
 }
 
 export function areGameStatesEquivalent(previous: GameState, next: GameState): boolean {
@@ -288,6 +398,13 @@ function areSnakesEquivalent(previous: SnakeState, next: SnakeState): boolean {
   }
 
   return true;
+}
+
+function cloneSnakeState(snake: SnakeState): SnakeState {
+  return {
+    ...snake,
+    body: snake.body.map((segment) => ({ ...segment })),
+  };
 }
 
 function arePositionsEquivalent(

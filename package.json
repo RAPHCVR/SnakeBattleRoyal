@@ -19,6 +19,7 @@
     "test": "turbo run test",
     "health:public": "node scripts/public-health.mjs",
     "qa:smoke": "node scripts/ui-smoke.mjs",
+    "qa:netcode": "node scripts/netcode-stress.mjs",
     "prod:check": "npm run typecheck && npm run test && npm run build",
     "prod:check:full": "npm run prod:check && npm run qa:smoke",
     "docker:prod": "docker compose -f docker-compose.prod.yml up -d --build --remove-orphans",
