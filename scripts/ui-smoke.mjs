@@ -677,7 +677,7 @@ async function runWebkitOnlineScenario() {
 
   pushAssertion(
     "webkit online exposes round and seat context",
-    /MANCHE 1/i.test(bodyText) && /PLAYER1|PLAYER2/i.test(bodyText),
+    /MANCHE 1/i.test(bodyText) && /PLAYER1|PLAYER2|P1|P2/i.test(bodyText),
     bodyText,
   );
   pushAssertion("webkit online has no page errors", combinedErrors.length === 0, combinedErrors);
@@ -690,6 +690,11 @@ async function runWebkitOnlineScenario() {
     { touchDock: snapshot.touchDock, section: snapshot.section },
   );
   pushAssertion("webkit online has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion(
+    "webkit online keeps the touch status chip on one line",
+    snapshot.touchStatusChip?.singleLine !== false,
+    snapshot.touchStatusChip,
+  );
 
   await Promise.all([context1.close(), context2.close()]);
   await browser.close();
@@ -739,6 +744,7 @@ async function collectSnapshot(page) {
       footer: "footer.glass-panel",
       touchDock: ".touch-dock",
       touchSideControls: ".touch-side-controls",
+      touchStatusChip: "[data-touch-status-chip='true']",
     };
 
     const rectOf = (selector) => {
@@ -810,6 +816,24 @@ async function collectSnapshot(page) {
       footer: rectOf(selectors.footer),
       touchDock: rectOf(selectors.touchDock),
       touchSideControls: rectOf(selectors.touchSideControls),
+      touchStatusChip: (() => {
+        const node = document.querySelector(selectors.touchStatusChip);
+        if (!(node instanceof HTMLElement)) {
+          return null;
+        }
+
+        const rect = node.getBoundingClientRect();
+        return {
+          text: node.textContent?.trim() ?? "",
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          scrollWidth: node.scrollWidth,
+          clientWidth: node.clientWidth,
+          scrollHeight: node.scrollHeight,
+          clientHeight: node.clientHeight,
+          singleLine: node.scrollHeight <= node.clientHeight + 1,
+        };
+      })(),
       canvas: (() => {
         const canvas = document.querySelector(".phaser-viewport canvas");
         if (!(canvas instanceof HTMLCanvasElement)) {

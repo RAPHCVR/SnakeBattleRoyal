@@ -25,6 +25,7 @@ import {
   estimateSnakeHeadCorrection,
   mergeControlledSnake,
   resolvePredictionLeadLimit,
+  resolveAuthoritativeTickPerfMs,
   resolvePredictionStepDelayMs,
   selectStableClockOffsetMs,
   toNetworkQuality,
@@ -80,6 +81,7 @@ interface OnlineSessionState {
   readonly waitingOpponentRematch: boolean;
   readonly lastError: string | null;
   readonly authoritativeTick: number;
+  readonly authoritativeTickPerfMs: number | null;
   readonly displayTick: number;
   readonly network: OnlineNetworkState;
 }
@@ -159,6 +161,7 @@ let onlinePredictionRuntime: EngineRuntime | null = null;
 let onlinePredictedHistory: EngineRuntime[] = [];
 let onlineAuthoritativeState: GameState | null = null;
 let onlineAuthoritativeTick = 0;
+let onlineAuthoritativeTickPerfMs: number | null = null;
 let onlineNextTickAtMs: number | null = null;
 let onlineAuthoritativeProcessedInputs: ProcessedInputSequences = createEmptyProcessedInputSequences();
 let onlineAuthoritativeRngSeed = 1;
@@ -253,6 +256,7 @@ function createOnlineSessionState(
     waitingOpponentRematch: false,
     lastError: null,
     authoritativeTick: 0,
+    authoritativeTickPerfMs: null,
     displayTick: 0,
     network: createOnlineNetworkState(),
     ...override,
@@ -401,6 +405,7 @@ function resetOnlineRuntimeState(): void {
   onlinePredictedHistory = [];
   onlineAuthoritativeState = null;
   onlineAuthoritativeTick = 0;
+  onlineAuthoritativeTickPerfMs = null;
   onlineNextTickAtMs = null;
   onlineAuthoritativeProcessedInputs = createEmptyProcessedInputSequences();
   onlineAuthoritativeRngSeed = 1;
@@ -1207,6 +1212,7 @@ async function startOnlineMatchmaking(
         connectedPlayers === 2 &&
         countdownEndsAtMs > Date.now() &&
         countdownDurationMs > 0;
+      const estimatedServerNowMs = getEstimatedServerNowMs();
       const matchingPredictedRuntime = currentStore.online.ownSnakeId
         ? findMatchingPredictedRuntime(tick, nextGame, currentStore.online.ownSnakeId)
         : null;
@@ -1225,8 +1231,19 @@ async function startOnlineMatchmaking(
       onlineLastAuthoritativeReceivedPerfMs = authoritativeReceivedPerfMs;
       clearPredictionLeadClamp();
 
+      const authoritativeTickPerfMs = resolveAuthoritativeTickPerfMs({
+        tick,
+        previousTick: onlineAuthoritativeTick,
+        previousTickPerfMs: onlineAuthoritativeTickPerfMs,
+        tickRateMs: nextGame.config.tickRateMs,
+        nextTickAtMs,
+        estimatedServerNowMs,
+        nowPerfMs: authoritativeReceivedPerfMs,
+      });
+
       onlineAuthoritativeState = nextGame;
       onlineAuthoritativeTick = tick;
+      onlineAuthoritativeTickPerfMs = authoritativeTickPerfMs;
       onlineNextTickAtMs = nextTickAtMs;
       onlineAuthoritativeProcessedInputs = processedInputs;
       onlineAuthoritativeRngSeed = rngSeed;
@@ -1296,6 +1313,7 @@ async function startOnlineMatchmaking(
               waitingOpponentRematch,
               lastError: null,
               authoritativeTick: tick,
+              authoritativeTickPerfMs,
               displayTick: state.online.displayTick,
               network: getOnlineNetworkSnapshot(ownId, state.online.displayTick, tick),
             }),
@@ -1394,6 +1412,7 @@ async function startOnlineMatchmaking(
             waitingOpponentRematch,
             lastError: null,
             authoritativeTick: tick,
+            authoritativeTickPerfMs,
             displayTick: runtime.tick,
             network: getOnlineNetworkSnapshot(ownId, runtime.tick, tick),
           }),
@@ -1730,6 +1749,7 @@ function renderGameToText(): string {
       waitingForOpponent: state.online.waitingForOpponent,
       waitingOpponentRematch: state.online.waitingOpponentRematch,
       authoritativeTick: state.online.authoritativeTick,
+      authoritativeTickPerfMs: state.online.authoritativeTickPerfMs,
       displayTick: state.online.displayTick,
       network: state.online.network,
     },

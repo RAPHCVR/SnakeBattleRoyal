@@ -75,7 +75,7 @@ export class SnakeArenaScene extends Phaser.Scene {
 
   public override update(_time: number, delta: number): void {
     this.renderFromStore(false);
-    this.advanceSegmentMotion(delta, this.time.now);
+    this.advanceSegmentMotion(delta, performance.now());
   }
 
   private handleResize(): void {
@@ -129,13 +129,15 @@ export class SnakeArenaScene extends Phaser.Scene {
             jitterMs: storeState.online.network.jitterMs,
           })
         : remoteInterpolationDelayMs;
+    const nowMs = performance.now();
+    const remoteSnapshotAtMs =
+      storeState.mode === "online" ? (storeState.online.authoritativeTickPerfMs ?? nowMs) : nowMs;
     const snapPositions =
       force ||
       this.snapNextRender ||
       !previous ||
       previous.status !== state.status ||
       state.status !== "running";
-    const nowMs = this.time.now;
 
     this.syncFood(state, previous, layout, snapPositions);
     this.syncSnakes(
@@ -147,6 +149,7 @@ export class SnakeArenaScene extends Phaser.Scene {
       onlineRemoteInterpolationDelayMs,
       ownSnakeId,
       nowMs,
+      remoteSnapshotAtMs,
     );
     this.snapNextRender = false;
 
@@ -242,6 +245,7 @@ export class SnakeArenaScene extends Phaser.Scene {
     remoteInterpolationDelayMs: number,
     ownSnakeId: SnakeState["id"] | null,
     nowMs: number,
+    remoteSnapshotAtMs: number,
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
@@ -275,7 +279,7 @@ export class SnakeArenaScene extends Phaser.Scene {
               ? {
                   kind: "buffered",
                   currentWorld: snappedWorld,
-                  snapshots: [{ atMs: nowMs, world: snappedWorld }],
+                  snapshots: [{ atMs: remoteSnapshotAtMs, world: snappedWorld }],
                   interpolationDelayMs: remoteInterpolationDelayMs,
                 }
               : {
@@ -298,16 +302,26 @@ export class SnakeArenaScene extends Phaser.Scene {
               : motion.currentWorld;
           const alignedTarget = alignWorldPosition(layout, lastWorld, segment);
           const previousSnapshot = motion.kind === "buffered" ? motion.snapshots.at(-1) : null;
+          const snapshotAtMs =
+            previousSnapshot !== null && previousSnapshot !== undefined
+              ? Math.max(previousSnapshot.atMs + 1, remoteSnapshotAtMs)
+              : remoteSnapshotAtMs;
+          const bufferedSnapshots = motion.kind === "buffered" ? [...motion.snapshots] : [];
           const nextSnapshots =
             previousSnapshot &&
             areSameWorldPoint(previousSnapshot.world, alignedTarget)
-              ? motion.kind === "buffered"
-                ? motion.snapshots
-                : [{ atMs: nowMs, world: alignedTarget }]
-              : [
-                  ...(motion.kind === "buffered" ? motion.snapshots : []),
-                  { atMs: nowMs, world: alignedTarget },
-                ].slice(-4);
+              ? (() => {
+                  if (bufferedSnapshots.length === 0) {
+                    return [{ atMs: snapshotAtMs, world: alignedTarget }];
+                  }
+
+                  bufferedSnapshots[bufferedSnapshots.length - 1] = {
+                    atMs: snapshotAtMs,
+                    world: alignedTarget,
+                  };
+                  return bufferedSnapshots.slice(-4);
+                })()
+              : [...bufferedSnapshots, { atMs: snapshotAtMs, world: alignedTarget }].slice(-4);
 
           this.segmentMotion.set(key, {
             kind: "buffered",

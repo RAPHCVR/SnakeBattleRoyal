@@ -250,15 +250,58 @@ export function resolveRemoteInterpolationDelayMs({
   readonly latencyMs: number | null;
   readonly jitterMs: number | null;
 }): number {
-  const baseDelayMs = Math.max(1, Math.round(tickRateMs));
+  const baseDelayMs = Math.max(1, Math.round(tickRateMs * 1.25));
   const jitterSlackMs =
-    jitterMs === null ? 0 : Math.min(baseDelayMs, Math.round(Math.max(0, jitterMs) * 2));
+    jitterMs === null ? 0 : Math.min(tickRateMs, Math.round(Math.max(0, jitterMs) * 2));
   const latencySlackMs =
     latencyMs === null
       ? 0
       : Math.min(Math.round(baseDelayMs * 0.3), Math.round(Math.max(0, latencyMs - baseDelayMs) * 0.15));
 
   return Math.max(baseDelayMs, Math.min(baseDelayMs * 2, baseDelayMs + jitterSlackMs + latencySlackMs));
+}
+
+export function resolveAuthoritativeTickPerfMs({
+  tick,
+  previousTick,
+  previousTickPerfMs,
+  tickRateMs,
+  nextTickAtMs,
+  estimatedServerNowMs,
+  nowPerfMs,
+}: {
+  readonly tick: number;
+  readonly previousTick: number;
+  readonly previousTickPerfMs: number | null;
+  readonly tickRateMs: number;
+  readonly nextTickAtMs: number | null;
+  readonly estimatedServerNowMs: number | null;
+  readonly nowPerfMs: number;
+}): number {
+  const continuityPerfMs =
+    previousTickPerfMs !== null && tick >= previousTick
+      ? previousTickPerfMs + (tick - previousTick) * tickRateMs
+      : null;
+  const clockPerfMs =
+    nextTickAtMs !== null && estimatedServerNowMs !== null
+      ? nowPerfMs +
+        clampNumber(nextTickAtMs - estimatedServerNowMs - tickRateMs, -tickRateMs * 2, tickRateMs * 2)
+      : null;
+
+  if (continuityPerfMs !== null && clockPerfMs !== null) {
+    const maxClockCorrectionMs = Math.max(
+      4,
+      Math.round(Math.max(1, tick - previousTick) * tickRateMs * 0.35),
+    );
+
+    return continuityPerfMs + clampNumber(
+      clockPerfMs - continuityPerfMs,
+      -maxClockCorrectionMs,
+      maxClockCorrectionMs,
+    );
+  }
+
+  return clockPerfMs ?? continuityPerfMs ?? nowPerfMs;
 }
 
 export function selectStableClockOffsetMs(
@@ -535,6 +578,10 @@ function toFiniteNumber(value: unknown, fallback: number): number {
 
 function clampTickDelayMs(delayMs: number, tickRateMs: number): number {
   return Math.max(1, Math.min(tickRateMs, Math.round(delayMs)));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function isRecord(value: unknown): value is AnyRecord {

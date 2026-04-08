@@ -116,7 +116,10 @@ export function App() {
   const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
   const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
   const onlineSeatLabel = isOnline && online.ownSnakeId ? online.ownSnakeId.toUpperCase() : null;
+  const touchSeatLabel =
+    isOnline && online.ownSnakeId ? (online.ownSnakeId === "player1" ? "P1" : "P2") : "Online";
   const connectionWarning = isOnline ? toConnectionWarning(online.network) : null;
+  const touchConnectionWarning = isOnline ? toCompactConnectionWarning(online.network) : null;
   const phaseLabel = isMenu
     ? "Menu"
     : isMatchmaking
@@ -146,14 +149,18 @@ export function App() {
         ? "Pause"
         : connectionWarning;
   const touchSummaryLabel = showOnlineWaiting
-    ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
+    ? `Room ${Math.min(online.connectedPlayers, 2)}/2`
     : showCountdownOverlay
-      ? `Depart ${countdownDisplay.shortLabel}`
+      ? `T-${countdownDisplay.shortLabel}`
       : paused
         ? "Pause"
         : isOnline
-          ? [onlineSeatLabel ?? "Online", connectionWarning].filter(Boolean).join(" • ")
+          ? touchConnectionWarning
+            ? `${touchSeatLabel} ${touchConnectionWarning}`
+            : touchSeatLabel
           : "Ready";
+  const touchSummaryAccent =
+    showOnlineWaiting || paused || touchConnectionWarning ? "orange" : isOnline ? "teal" : "slate";
   const touchFullscreenEnabled = Boolean(touchMode);
 
   const handleToggleFullscreen = () => {
@@ -346,7 +353,13 @@ export function App() {
               <div className="arena-hud__cluster">
                 <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
                 {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
-                <InfoChip label={touchSummaryLabel} compact />
+                <InfoChip
+                  label={touchSummaryLabel}
+                  accent={touchSummaryAccent}
+                  compact
+                  className="arena-chip--touch-status"
+                  dataAttribute="touch-status"
+                />
               </div>
               <div className="arena-hud__scores arena-hud__scores--touch">
                 <CompactArenaScore
@@ -621,9 +634,16 @@ interface InfoChipProps {
   readonly accent?: "teal" | "orange" | "slate";
   readonly compact?: boolean;
   readonly className?: string | undefined;
+  readonly dataAttribute?: string | undefined;
 }
 
-function InfoChip({ label, accent = "slate", compact = false, className }: InfoChipProps) {
+function InfoChip({
+  label,
+  accent = "slate",
+  compact = false,
+  className,
+  dataAttribute,
+}: InfoChipProps) {
   const palette =
     accent === "teal"
       ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-50"
@@ -633,7 +653,8 @@ function InfoChip({ label, accent = "slate", compact = false, className }: InfoC
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-3 py-1 font-semibold uppercase tracking-[0.18em] ${palette} ${
+      data-touch-status-chip={dataAttribute === "touch-status" ? "true" : undefined}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-3 py-1 font-semibold uppercase leading-none tracking-[0.18em] ${palette} ${
         compact ? "text-[9px]" : "text-[10px]"
       } ${className ?? ""}`}
     >
@@ -823,6 +844,26 @@ function toConnectionWarning(network: {
 
   if (network.quality === "fair" || network.quality === "poor") {
     return "Connexion fragile";
+  }
+
+  return null;
+}
+
+function toCompactConnectionWarning(network: {
+  readonly quality: "unknown" | "excellent" | "good" | "fair" | "poor";
+  readonly pendingInputs: number;
+  readonly lastCorrectionDistance: number;
+}): string | null {
+  if (network.pendingInputs >= 2) {
+    return "Queue";
+  }
+
+  if (network.lastCorrectionDistance > 1) {
+    return "Resync";
+  }
+
+  if (network.quality === "fair" || network.quality === "poor") {
+    return "Sync";
   }
 
   return null;

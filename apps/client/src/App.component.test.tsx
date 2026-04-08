@@ -193,6 +193,40 @@ describe("App component states", () => {
     expect(screen.getByText("Connexion fragile")).toBeInTheDocument();
   });
 
+  it("keeps the touch status chip short when online sync is degraded", () => {
+    mocks.controls.coarsePointer = true;
+    mocks.storeState = createStoreState({
+      mode: "online",
+      gameState: createGameState("running"),
+      session: {
+        roundNumber: 4,
+        player1Wins: 1,
+        player2Wins: 1,
+      },
+      online: {
+        ownSnakeId: "player1",
+        roomId: "ABCD",
+        roomStatus: "running",
+        network: {
+          latencyMs: 126,
+          jitterMs: 26,
+          quality: "fair",
+          pendingInputs: 0,
+          lastSentSequence: 8,
+          lastProcessedSequence: 8,
+          correctionCount: 2,
+          lastCorrectionDistance: 0,
+          predictionLeadTicks: 0,
+        },
+      },
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("P1 Sync")).toBeInTheDocument();
+    expect(screen.queryByText("Connexion fragile")).not.toBeInTheDocument();
+  });
+
   it("shows a countdown overlay before the round starts", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));

@@ -272,6 +272,11 @@ body {
   letter-spacing: 0.15em;
 }
 
+.arena-chip--touch-status {
+  justify-content: center;
+  min-width: 4.9rem;
+}
+
 @media (max-width: 1180px) {
   .arena-hud--desktop-immersive {
     align-items: flex-start;
@@ -1202,6 +1207,12 @@ body {
 }
 
 @media (max-width: 360px) {
+  .arena-chip--touch-status {
+    min-width: 4.35rem;
+    padding-inline: 0.62rem;
+    letter-spacing: 0.14em;
+  }
+
   .app-shell--floating-local-dock {
     padding-bottom: 0.75rem;
   }

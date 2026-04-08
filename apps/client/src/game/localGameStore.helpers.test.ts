@@ -9,6 +9,7 @@ import {
   estimateSnakeHeadCorrection,
   mergeControlledSnake,
   resolvePredictionLeadLimit,
+  resolveAuthoritativeTickPerfMs,
   resolveRemoteInterpolationDelayMs,
   resolvePredictionStepDelayMs,
   resolveNextTickDelayMs,
@@ -470,21 +471,59 @@ describe("network helpers", () => {
         latencyMs: null,
         jitterMs: null,
       }),
-    ).toBe(100);
+    ).toBe(125);
     expect(
       resolveRemoteInterpolationDelayMs({
         tickRateMs: 100,
         latencyMs: 36,
         jitterMs: 5,
       }),
-    ).toBe(110);
+    ).toBe(135);
     expect(
       resolveRemoteInterpolationDelayMs({
         tickRateMs: 100,
         latencyMs: 128,
         jitterMs: 18,
       }),
-    ).toBe(140);
+    ).toBe(161);
+  });
+
+  it("keeps authoritative tick timing close to the fixed timeline while following the server clock", () => {
+    expect(
+      resolveAuthoritativeTickPerfMs({
+        tick: 12,
+        previousTick: 11,
+        previousTickPerfMs: 1_100,
+        tickRateMs: 100,
+        nextTickAtMs: null,
+        estimatedServerNowMs: null,
+        nowPerfMs: 1_240,
+      }),
+    ).toBe(1_200);
+
+    expect(
+      resolveAuthoritativeTickPerfMs({
+        tick: 12,
+        previousTick: 11,
+        previousTickPerfMs: 1_100,
+        tickRateMs: 100,
+        nextTickAtMs: 5_220,
+        estimatedServerNowMs: 5_130,
+        nowPerfMs: 1_210,
+      }),
+    ).toBe(1_200);
+
+    expect(
+      resolveAuthoritativeTickPerfMs({
+        tick: 12,
+        previousTick: 11,
+        previousTickPerfMs: 1_100,
+        tickRateMs: 100,
+        nextTickAtMs: 5_320,
+        estimatedServerNowMs: 5_130,
+        nowPerfMs: 1_210,
+      }),
+    ).toBe(1_235);
   });
 
   it("prefers the lowest-rtt recent clock sample", () => {
