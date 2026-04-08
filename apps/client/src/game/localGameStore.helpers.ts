@@ -161,6 +161,34 @@ export function estimateSnakeHeadCorrection(
   return wrappedDx + wrappedDy;
 }
 
+export function areGameStatesEquivalent(previous: GameState, next: GameState): boolean {
+  if (
+    previous.status !== next.status ||
+    previous.winner !== next.winner ||
+    previous.config.width !== next.config.width ||
+    previous.config.height !== next.config.height ||
+    previous.config.tickRateMs !== next.config.tickRateMs ||
+    previous.snakes.length !== next.snakes.length
+  ) {
+    return false;
+  }
+
+  if (!arePositionsEquivalent(previous.food, next.food)) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.snakes.length; index += 1) {
+    const previousSnake = previous.snakes[index];
+    const nextSnake = next.snakes[index];
+
+    if (!previousSnake || !nextSnake || !areSnakesEquivalent(previousSnake, nextSnake)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function toNetworkQuality(
   latencyMs: number | null,
   jitterMs: number | null,
@@ -195,6 +223,37 @@ function hasAnyScoreIncrement(previous: GameState, next: GameState): boolean {
     }
   }
   return false;
+}
+
+function areSnakesEquivalent(previous: SnakeState, next: SnakeState): boolean {
+  if (
+    previous.id !== next.id ||
+    previous.direction !== next.direction ||
+    previous.alive !== next.alive ||
+    previous.score !== next.score ||
+    previous.body.length !== next.body.length
+  ) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.body.length; index += 1) {
+    if (!arePositionsEquivalent(previous.body[index] ?? null, next.body[index] ?? null)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function arePositionsEquivalent(
+  previous: GridPosition | null | undefined,
+  next: GridPosition | null | undefined,
+): boolean {
+  if (!previous || !next) {
+    return previous === next;
+  }
+
+  return previous.x === next.x && previous.y === next.y;
 }
 
 function toSnakes(value: unknown): SnakeState[] {

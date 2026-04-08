@@ -16,6 +16,7 @@ import {
 } from "@snake-duel/shared";
 import { create } from "zustand";
 import {
+  areGameStatesEquivalent,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
@@ -129,7 +130,6 @@ const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_PREDICTION_BUFFER_MS = 6;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 12;
 const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
-const ONLINE_INPUT_REACTION_DELAY_MS = 16;
 const ROUND_START_COUNTDOWN_MS = 3_000;
 
 let localLoopHandle: number | null = null;
@@ -470,11 +470,42 @@ function computePredictionDelayMs(tickRateMs: number): number {
   return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, estimatedDelay));
 }
 
-function getInputReactionPredictionDelayMs(tickRateMs: number): number {
-  return Math.min(
-    computePredictionDelayMs(tickRateMs),
-    Math.max(8, Math.min(tickRateMs, ONLINE_INPUT_REACTION_DELAY_MS)),
-  );
+function computeCorrectionTransitionDurationMs(tickRateMs: number): number {
+  return Math.max(36, Math.min(tickRateMs, Math.round(tickRateMs * 0.45)));
+}
+
+function computeAuthoritativeTransitionDurationMs(
+  tickRateMs: number,
+  ownSnakeId: SnakeId | null,
+  status: GameState["status"],
+  correctionActive: boolean,
+  correctionDistance: number,
+): number {
+  if (status !== "running") {
+    return tickRateMs;
+  }
+
+  if (correctionActive && correctionDistance > 0) {
+    return computeCorrectionTransitionDurationMs(tickRateMs);
+  }
+
+  if (ownSnakeId) {
+    return computePredictionDelayMs(tickRateMs);
+  }
+
+  return tickRateMs;
+}
+
+function shouldKeepPredictedDisplayState(
+  previousGame: GameState,
+  nextGame: GameState,
+  previousDisplayTick: number,
+  nextTick: number,
+  ownSnakeId: SnakeId | null,
+): boolean {
+  return Boolean(ownSnakeId) &&
+    previousDisplayTick === nextTick &&
+    areGameStatesEquivalent(previousGame, nextGame);
 }
 
 function getOwnProcessedSequence(
@@ -594,7 +625,7 @@ function scheduleOnlinePredictionStep(
   onlinePredictionTimeoutHandle = window.setTimeout(() => {
     onlinePredictionTimeoutHandle = null;
     onlinePredictionDueAtMs = null;
-    const advanced = runOnlinePredictionStep(setState, stepDelayMs);
+    const advanced = runOnlinePredictionStep(setState);
     if (!advanced) {
       return;
     }
@@ -606,7 +637,6 @@ function scheduleOnlinePredictionStep(
 
 function runOnlinePredictionStep(
   setState: StoreSetState,
-  durationMs: number,
 ): boolean {
   const state = storeGetState?.();
   if (!state || state.mode !== "online" || state.gameState.status !== "running") {
@@ -633,7 +663,7 @@ function runOnlinePredictionStep(
     nextRuntime.game,
     nextRuntime.tick,
     nextRuntime.lastTickEvent,
-    durationMs,
+    nextRuntime.game.config.tickRateMs,
   );
 
   setState((store) => ({
@@ -913,6 +943,67 @@ async function startOnlineMatchmaking(
 
       onlinePredictionRuntime = runtime;
 
+      const keepPredictedDisplayState = shouldKeepPredictedDisplayState(
+        previousGame,
+        runtime.game,
+        previousDisplayTick,
+        runtime.tick,
+        currentStore.online.ownSnakeId,
+      );
+
+      if (keepPredictedDisplayState) {
+        onlineLastCorrectionDistance = 0;
+
+        setState((state) => {
+          const ownId = state.online.ownSnakeId;
+          const rematchVoted = ownId
+            ? ownId === "player1"
+              ? rematchVotes.player1
+              : rematchVotes.player2
+            : false;
+          const waitingOpponentRematch = ownId
+            ? rematchVoted &&
+              !(ownId === "player1" ? rematchVotes.player2 : rematchVotes.player1)
+            : false;
+
+          return {
+            ...state,
+            mode: "online",
+            session: toSessionSummary(networkState),
+            countdown: countdownActive
+              ? createCountdownState({
+                  active: true,
+                  endsAtMs: countdownEndsAtMs,
+                  durationMs: countdownDurationMs,
+                  source: "online",
+                })
+              : createCountdownState(),
+            online: createOnlineSessionState({
+              ...state.online,
+              connecting: false,
+              roomId: room.roomId,
+              connectedPlayers,
+              roomStatus: nextGame.status,
+              waitingForOpponent,
+              rematchVotes,
+              rematchVoted,
+              waitingOpponentRematch,
+              lastError: null,
+              authoritativeTick: tick,
+              displayTick: runtime.tick,
+              network: getOnlineNetworkSnapshot(ownId, runtime.tick, tick),
+            }),
+          };
+        });
+
+        if (nextGame.status === "running") {
+          scheduleOnlinePredictionStep(setState, computePredictionDelayMs(nextGame.config.tickRateMs));
+        } else {
+          stopOnlinePredictionLoop();
+        }
+        return;
+      }
+
       const correctionActive =
         Boolean(currentStore.online.ownSnakeId) && previousDisplayTick >= tick;
       const correctionDistance =
@@ -930,9 +1021,13 @@ async function startOnlineMatchmaking(
         runtime.game,
         runtime.tick,
         tickEvent,
-        correctionDistance > 0 && correctionActive
-          ? Math.max(48, Math.min(nextGame.config.tickRateMs, Math.round(nextGame.config.tickRateMs * 0.6)))
-          : nextGame.config.tickRateMs,
+        computeAuthoritativeTransitionDurationMs(
+          nextGame.config.tickRateMs,
+          currentStore.online.ownSnakeId,
+          nextGame.status,
+          correctionActive,
+          correctionDistance,
+        ),
       );
 
       setState((state) => {
@@ -1234,7 +1329,9 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         }),
       }));
 
-      scheduleOnlinePredictionStep(set, getInputReactionPredictionDelayMs(state.gameState.config.tickRateMs));
+      if (onlinePredictionTimeoutHandle === null) {
+        scheduleOnlinePredictionStep(set, computePredictionDelayMs(state.gameState.config.tickRateMs));
+      }
       return true;
     },
     togglePause: () => {
@@ -1320,6 +1417,15 @@ function installAutomationHooks(): void {
 
   window.render_game_to_text = renderGameToText;
   window.advanceTime = (ms: number) => advanceLocalSimulationByMs(ms);
+  window.enqueueInput = (direction: Direction, snakeId?: SnakeId) => {
+    const state = useLocalGameStore.getState();
+    if (state.mode === "online") {
+      return state.enqueueOnlineInput(direction);
+    }
+
+    const resolvedSnakeId = snakeId ?? "player1";
+    return state.enqueueLocalInput(resolvedSnakeId, direction);
+  };
 }
 
 function toSnakeId(value: unknown): SnakeId | null {

@@ -1,6 +1,7 @@
 import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState, type TickEvent } from "@snake-duel/shared";
 import { describe, expect, it } from "vitest";
 import {
+  areGameStatesEquivalent,
   computeTransition,
   createSessionSummary,
   estimateSnakeHeadCorrection,
@@ -263,6 +264,20 @@ describe("network helpers", () => {
     expect(toNetworkQuality(70, 11)).toBe("good");
     expect(toNetworkQuality(110, 22)).toBe("fair");
     expect(toNetworkQuality(160, 40)).toBe("poor");
+  });
+
+  it("treats predicted and authoritative states as equivalent only when render data matches", () => {
+    const previous = createGameState();
+    const same = createGameState();
+    const changedScore = createGameState({
+      snakes: [
+        createSnake("player1", { score: 1 }),
+        createSnake("player2"),
+      ],
+    });
+
+    expect(areGameStatesEquivalent(previous, same)).toBe(true);
+    expect(areGameStatesEquivalent(previous, changedScore)).toBe(false);
   });
 });
 

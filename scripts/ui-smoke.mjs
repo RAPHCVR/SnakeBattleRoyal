@@ -460,6 +460,7 @@ async function runAutomationHooksScenario() {
   await page.waitForTimeout(3200);
 
   const before = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
+  const hasEnqueueInputHook = await page.evaluate(() => typeof window.enqueueInput === "function");
   const zeroStepAdvance = await page.evaluate(() => window.advanceTime?.(0) ?? null);
   await page.waitForTimeout(90);
   const afterNoop = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
@@ -506,6 +507,7 @@ async function runAutomationHooksScenario() {
     afterManualAdvance.automation?.manualTimeControl === true,
     afterManualAdvance.automation,
   );
+  pushAssertion("automation hooks expose enqueueInput", hasEnqueueInputHook === true, hasEnqueueInputHook);
   pushAssertion("automation hooks have no page errors", issues.pageErrors.length === 0, issues.pageErrors);
 
   await context.close();
@@ -518,6 +520,7 @@ async function runAutomationHooksScenario() {
     before,
     afterNoop,
     afterManualAdvance,
+    hasEnqueueInputHook,
     issues,
     zeroStepAdvance,
   };

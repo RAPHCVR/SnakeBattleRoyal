@@ -85,17 +85,18 @@ export class SnakeArenaScene extends Phaser.Scene {
     const state = storeState.gameState;
     const transition = storeState.transition;
     const previous = transition?.previous;
+    const transitionDurationMs = Math.max(1, transition?.durationMs ?? state.config.tickRateMs);
     const snapPositions = force || this.snapNextRender;
 
     this.syncFood(state, previous, layout, snapPositions);
-    this.syncSnakes(state, previous, layout, snapPositions);
+    this.syncSnakes(state, previous, layout, snapPositions, transitionDurationMs);
     this.snapNextRender = false;
 
     if (!force && transition?.foodEatenAt) {
       this.playEatBurst(transition.foodEatenAt);
     }
     if (!force && transition?.fatalCollision) {
-      this.time.delayedCall(state.config.tickRateMs, () => {
+      this.time.delayedCall(transitionDurationMs, () => {
         this.cameras.main.shake(200, 0.01);
       });
     }
@@ -179,6 +180,7 @@ export class SnakeArenaScene extends Phaser.Scene {
     previous: GameState | undefined,
     layout: ArenaBoardLayout,
     snapPositions: boolean,
+    transitionDurationMs: number,
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
@@ -204,9 +206,8 @@ export class SnakeArenaScene extends Phaser.Scene {
           continue;
         }
 
-        const wrapAnimation = getWrapAnimation(from, segment, layout);
-        if (wrapAnimation) {
-          this.playWrapTween(node, wrapAnimation, state.config.tickRateMs);
+        if (areSameGridPosition(from, segment) || isWrappedMove(from, segment)) {
+          node.setPosition(target.x, target.y);
           continue;
         }
 
@@ -214,7 +215,7 @@ export class SnakeArenaScene extends Phaser.Scene {
           targets: node,
           x: target.x,
           y: target.y,
-          duration: state.config.tickRateMs,
+          duration: transitionDurationMs,
           ease: "Linear",
         });
       }
@@ -252,31 +253,6 @@ export class SnakeArenaScene extends Phaser.Scene {
     node.setAlpha(visualAlive ? 1 : 0.72);
     this.segments.set(key, node);
     return node;
-  }
-
-  private playWrapTween(
-    node: SegmentNode,
-    animation: WrapAnimation,
-    duration: number,
-  ): void {
-    const halfDuration = Math.max(1, Math.floor(duration / 2));
-    this.tweens.add({
-      targets: node,
-      x: animation.exit.x,
-      y: animation.exit.y,
-      duration: halfDuration,
-      ease: "Linear",
-      onComplete: () => {
-        node.setPosition(animation.entry.x, animation.entry.y);
-        this.tweens.add({
-          targets: node,
-          x: animation.target.x,
-          y: animation.target.y,
-          duration: duration - halfDuration,
-          ease: "Linear",
-        });
-      },
-    });
   }
 
   private startFoodPulse(): void {
@@ -347,50 +323,15 @@ function didSnakeDieThisTick(previous: SnakeState | undefined, next: SnakeState)
   return Boolean(previous?.alive && !next.alive);
 }
 
-interface WrapAnimation {
-  readonly exit: { x: number; y: number };
-  readonly entry: { x: number; y: number };
-  readonly target: { x: number; y: number };
+function areSameGridPosition(a: GridPosition, b: GridPosition): boolean {
+  return a.x === b.x && a.y === b.y;
 }
 
-function getWrapAnimation(
-  from: GridPosition,
-  to: GridPosition,
-  layout: ArenaBoardLayout,
-): WrapAnimation | null {
-  const target = toBoardPosition(layout, to);
-
-  if (from.x === GRID_WIDTH - 1 && to.x === 0 && from.y === to.y) {
-    return {
-      exit: { x: layout.offsetX + layout.boardWidth + layout.wrapPadding, y: target.y },
-      entry: { x: layout.offsetX - layout.wrapPadding, y: target.y },
-      target,
-    };
-  }
-
-  if (from.x === 0 && to.x === GRID_WIDTH - 1 && from.y === to.y) {
-    return {
-      exit: { x: layout.offsetX - layout.wrapPadding, y: target.y },
-      entry: { x: layout.offsetX + layout.boardWidth + layout.wrapPadding, y: target.y },
-      target,
-    };
-  }
-
-  if (from.y === GRID_HEIGHT - 1 && to.y === 0 && from.x === to.x) {
-    return {
-      exit: { x: target.x, y: layout.offsetY + layout.boardHeight + layout.wrapPadding },
-      entry: { x: target.x, y: layout.offsetY - layout.wrapPadding },
-      target,
-    };
-  }
-
-  if (from.y === 0 && to.y === GRID_HEIGHT - 1 && from.x === to.x) {
-    return {
-      exit: { x: target.x, y: layout.offsetY - layout.wrapPadding },
-      entry: { x: target.x, y: layout.offsetY + layout.boardHeight + layout.wrapPadding },
-      target,
-    };
-  }
-
-  return null;
+function isWrappedMove(from: GridPosition, to: GridPosition): boolean {
+  return (
+    (from.x === GRID_WIDTH - 1 && to.x === 0 && from.y === to.y) ||
+    (from.x === 0 && to.x === GRID_WIDTH - 1 && from.y === to.y) ||
+    (from.y === GRID_HEIGHT - 1 && to.y === 0 && from.x === to.x) ||
+    (from.y === 0 && to.y === GRID_HEIGHT - 1 && from.x === to.x)
+  );
 }
