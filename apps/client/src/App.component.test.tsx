@@ -149,7 +149,35 @@ describe("App component states", () => {
 
     expect(screen.getByText("Ping 38ms")).toBeInTheDocument();
     expect(screen.getByText("Jitter 7ms")).toBeInTheDocument();
-    expect(screen.getByText("Queue 1")).toBeInTheDocument();
+    expect(screen.queryByText("Queue 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sync stable")).not.toBeInTheDocument();
+  });
+
+  it("surfaces sync warnings only when telemetry is actually degraded", () => {
+    mocks.storeState = createStoreState({
+      mode: "online",
+      gameState: createGameState("running"),
+      online: {
+        ownSnakeId: "player1",
+        roomId: "ABCD",
+        roomStatus: "running",
+        network: {
+          latencyMs: 122,
+          jitterMs: 24,
+          quality: "fair",
+          pendingInputs: 0,
+          lastSentSequence: 8,
+          lastProcessedSequence: 8,
+          correctionCount: 1,
+          lastCorrectionDistance: 0,
+          predictionLeadTicks: 0,
+        },
+      },
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("Sync fragile")).toBeInTheDocument();
   });
 });
 

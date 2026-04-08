@@ -127,12 +127,7 @@ export function App() {
   const networkChipAccent = toNetworkChipAccent(online.network.quality);
   const latencyChipLabel = toLatencyChipLabel(online.network.latencyMs);
   const jitterChipLabel = toJitterChipLabel(online.network.jitterMs);
-  const predictionChipLabel =
-    online.network.pendingInputs > 0
-      ? `Queue ${online.network.pendingInputs}`
-      : online.network.predictionLeadTicks > 0
-        ? `Lead +${online.network.predictionLeadTicks}`
-        : "Sync stable";
+  const syncChipLabel = toSyncChipLabel(online.network);
   const phaseLabel = isMenu
     ? "Menu"
     : isMatchmaking
@@ -294,9 +289,24 @@ export function App() {
                 ) : null}
                 {isOnline ? (
                   <>
-                    <InfoChip label={latencyChipLabel} accent={networkChipAccent} />
-                    <InfoChip label={jitterChipLabel} compact />
-                    <InfoChip label={predictionChipLabel} compact />
+                    <InfoChip
+                      label={latencyChipLabel}
+                      accent={networkChipAccent}
+                      className="min-w-[6.75rem] justify-center tabular-nums"
+                    />
+                    <InfoChip
+                      label={jitterChipLabel}
+                      compact
+                      className="min-w-[6.75rem] justify-center tabular-nums"
+                    />
+                    {syncChipLabel ? (
+                      <InfoChip
+                        label={syncChipLabel}
+                        accent="orange"
+                        compact
+                        className="min-w-[6.75rem] justify-center"
+                      />
+                    ) : null}
                   </>
                 ) : null}
                 {isMenu ? (
@@ -641,9 +651,10 @@ interface InfoChipProps {
   readonly label: string;
   readonly accent?: "teal" | "orange" | "slate";
   readonly compact?: boolean;
+  readonly className?: string;
 }
 
-function InfoChip({ label, accent = "slate", compact = false }: InfoChipProps) {
+function InfoChip({ label, accent = "slate", compact = false, className }: InfoChipProps) {
   const palette =
     accent === "teal"
       ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-50"
@@ -655,7 +666,7 @@ function InfoChip({ label, accent = "slate", compact = false }: InfoChipProps) {
     <span
       className={`inline-flex items-center rounded-full border px-3 py-1 font-semibold uppercase tracking-[0.18em] ${palette} ${
         compact ? "text-[9px]" : "text-[10px]"
-      }`}
+      } ${className ?? ""}`}
     >
       {label}
     </span>
@@ -735,6 +746,26 @@ function toLatencyChipLabel(latencyMs: number | null): string {
 
 function toJitterChipLabel(jitterMs: number | null): string {
   return jitterMs === null ? "Jitter --" : `Jitter ${jitterMs}ms`;
+}
+
+function toSyncChipLabel(network: {
+  readonly quality: "unknown" | "excellent" | "good" | "fair" | "poor";
+  readonly pendingInputs: number;
+  readonly lastCorrectionDistance: number;
+}): string | null {
+  if (network.pendingInputs >= 2) {
+    return `Queue ${network.pendingInputs}`;
+  }
+
+  if (network.lastCorrectionDistance > 1) {
+    return "Resync";
+  }
+
+  if (network.quality === "fair" || network.quality === "poor") {
+    return "Sync fragile";
+  }
+
+  return null;
 }
 
 function toNetworkChipAccent(
