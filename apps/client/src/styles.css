@@ -336,7 +336,6 @@ body {
   position: fixed;
   inset-inline: 0;
   bottom: env(safe-area-inset-bottom, 0px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 100% - 100svh);
   z-index: 24;
   display: flex;
   justify-content: center;

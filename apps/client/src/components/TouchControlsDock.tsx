@@ -58,9 +58,9 @@ export function TouchControlsDock({
     return (
       <motion.aside
         key="touch-dock-online"
-        initial={{ opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 18 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
         transition={{ duration: 0.18, ease: "easeOut" }}
         className={`touch-dock${floating ? " touch-dock--floating" : " touch-dock--online-inline"}`}
       >
@@ -107,9 +107,9 @@ export function TouchControlsDock({
     return (
       <motion.aside
         key={`touch-dock-${mode}-floating`}
-        initial={{ opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 18 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
         transition={{ duration: 0.18, ease: "easeOut" }}
         className="touch-dock touch-dock--floating"
       >
