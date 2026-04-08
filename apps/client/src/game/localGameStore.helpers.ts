@@ -219,10 +219,25 @@ export function resolvePredictionStepDelayMs({
 export function resolvePredictionLeadLimit({
   latencyMs,
   jitterMs,
+  tickRateMs,
+  authoritativeGapMs,
 }: {
   readonly latencyMs: number | null;
   readonly jitterMs: number | null;
+  readonly tickRateMs: number;
+  readonly authoritativeGapMs: number | null;
 }): number {
+  if (
+    (latencyMs !== null && latencyMs >= 70) ||
+    (jitterMs !== null && jitterMs >= 12) ||
+    (Number.isFinite(tickRateMs) &&
+      tickRateMs > 0 &&
+      authoritativeGapMs !== null &&
+      authoritativeGapMs >= Math.round(tickRateMs * 1.15))
+  ) {
+    return 3;
+  }
+
   return 2;
 }
 

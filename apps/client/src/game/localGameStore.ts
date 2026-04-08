@@ -138,6 +138,7 @@ const ONLINE_CLOCK_OFFSET_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_SAMPLE_LIMIT = 8;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 1;
 const ONLINE_PREDICTION_SPIN_THRESHOLD_MS = 12;
+const ONLINE_PREDICTION_CAP_RECHECK_MS = 18;
 const ONLINE_PREDICTION_HISTORY_LIMIT = 8;
 const ONLINE_MIN_AUTHORITATIVE_TRANSITION_RATIO = 0.72;
 const ROUND_START_COUNTDOWN_MS = 3_000;
@@ -173,6 +174,13 @@ let onlineClockOffsetMs: number | null = null;
 let onlineClockSamples: ClockOffsetSample[] = [];
 let onlineCorrectionCount = 0;
 let onlineLastCorrectionDistance = 0;
+let onlineLastAuthoritativeReceivedPerfMs: number | null = null;
+let onlineMaxAuthoritativeGapMs = 0;
+let onlineLateAuthoritativeUpdateCount = 0;
+let onlinePredictionLeadClampCount = 0;
+let onlinePredictionClampActive = false;
+let onlinePredictionClampStartedPerfMs: number | null = null;
+let onlineMaxPredictionClampMs = 0;
 
 type StoreSetState = (recipe: (state: LocalGameStoreState) => Partial<LocalGameStoreState>) => void;
 type StoreGetState = () => LocalGameStoreState;
@@ -412,6 +420,13 @@ function resetOnlineRuntimeState(): void {
   onlineClockSamples = [];
   onlineCorrectionCount = 0;
   onlineLastCorrectionDistance = 0;
+  onlineLastAuthoritativeReceivedPerfMs = null;
+  onlineMaxAuthoritativeGapMs = 0;
+  onlineLateAuthoritativeUpdateCount = 0;
+  onlinePredictionLeadClampCount = 0;
+  onlinePredictionClampActive = false;
+  onlinePredictionClampStartedPerfMs = null;
+  onlineMaxPredictionClampMs = 0;
 }
 
 function activateLocalRound(setState: StoreSetState): void {
@@ -522,6 +537,14 @@ function getEstimatedServerNowMs(): number | null {
   return onlineClockOffsetMs === null ? null : Date.now() + onlineClockOffsetMs;
 }
 
+function getCurrentAuthoritativeGapMs(): number | null {
+  if (onlineLastAuthoritativeReceivedPerfMs === null) {
+    return null;
+  }
+
+  return Math.max(0, performance.now() - onlineLastAuthoritativeReceivedPerfMs);
+}
+
 function getEstimatedOneWayDelayMs(tickRateMs: number): number {
   if (onlineLatencyMs !== null) {
     return Math.max(0, Math.round(onlineLatencyMs / 2));
@@ -535,10 +558,12 @@ function computeHeuristicPredictionDelayMs(tickRateMs: number): number {
   return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, Math.round(estimatedDelay)));
 }
 
-function getPredictionLeadLimit(): number {
+function getPredictionLeadLimit(tickRateMs: number): number {
   return resolvePredictionLeadLimit({
     latencyMs: onlineLatencyMs,
     jitterMs: onlineJitterMs,
+    tickRateMs,
+    authoritativeGapMs: getCurrentAuthoritativeGapMs(),
   });
 }
 
@@ -553,6 +578,31 @@ function computeOnlinePredictionDelayMs(
     estimatedServerNowMs: getEstimatedServerNowMs(),
     predictionLeadTicks: Math.max(0, currentPredictionTick - onlineAuthoritativeTick),
   });
+}
+
+function notePredictionLeadClamp(): void {
+  if (onlinePredictionClampActive) {
+    return;
+  }
+
+  onlinePredictionClampActive = true;
+  onlinePredictionLeadClampCount += 1;
+  onlinePredictionClampStartedPerfMs = performance.now();
+}
+
+function clearPredictionLeadClamp(): void {
+  if (!onlinePredictionClampActive) {
+    return;
+  }
+
+  onlinePredictionClampActive = false;
+  if (onlinePredictionClampStartedPerfMs !== null) {
+    onlineMaxPredictionClampMs = Math.max(
+      onlineMaxPredictionClampMs,
+      performance.now() - onlinePredictionClampStartedPerfMs,
+    );
+  }
+  onlinePredictionClampStartedPerfMs = null;
 }
 
 function computeCorrectionTransitionDurationMs(tickRateMs: number): number {
@@ -617,6 +667,40 @@ function getOnlineNetworkSnapshot(
     lastCorrectionDistance: onlineLastCorrectionDistance,
     predictionLeadTicks: getPredictionLeadTicks(displayTick, authoritativeTick),
   });
+}
+
+function scheduleOnlinePredictionTimer(
+  setState: StoreSetState,
+  delayMs: number,
+): void {
+  const normalizedDelayMs = Math.max(1, Math.round(delayMs));
+  const nextDueAtMs = performance.now() + normalizedDelayMs;
+  if (
+    onlinePredictionTimeoutHandle !== null &&
+    onlinePredictionDueAtMs !== null &&
+    onlinePredictionDueAtMs <= nextDueAtMs + 1
+  ) {
+    return;
+  }
+
+  stopOnlinePredictionLoop();
+  onlinePredictionDueAtMs = nextDueAtMs;
+
+  onlinePredictionTimeoutHandle = window.setTimeout(() => {
+    onlinePredictionTimeoutHandle = null;
+    flushOnlinePredictionWhenDue(setState);
+  }, Math.max(0, normalizedDelayMs - ONLINE_PREDICTION_SPIN_THRESHOLD_MS));
+}
+
+function scheduleOnlinePredictionCapRecheck(
+  setState: StoreSetState,
+  tickRateMs: number,
+): void {
+  notePredictionLeadClamp();
+  scheduleOnlinePredictionTimer(
+    setState,
+    Math.max(ONLINE_PREDICTION_CAP_RECHECK_MS, Math.round(tickRateMs * 0.18)),
+  );
 }
 
 function resetPredictedHistory(runtime: EngineRuntime): void {
@@ -735,28 +819,14 @@ function scheduleOnlinePredictionStep(
     return;
   }
 
-  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit()) {
-    stopOnlinePredictionLoop();
+  const tickRateMs = onlinePredictionRuntime.game.config.tickRateMs;
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit(tickRateMs)) {
+    scheduleOnlinePredictionCapRecheck(setState, tickRateMs);
     return;
   }
 
-  const normalizedDelayMs = Math.max(1, Math.round(stepDelayMs));
-  const nextDueAtMs = performance.now() + normalizedDelayMs;
-  if (
-    onlinePredictionTimeoutHandle !== null &&
-    onlinePredictionDueAtMs !== null &&
-    onlinePredictionDueAtMs <= nextDueAtMs + 1
-  ) {
-    return;
-  }
-
-  stopOnlinePredictionLoop();
-  onlinePredictionDueAtMs = nextDueAtMs;
-
-  onlinePredictionTimeoutHandle = window.setTimeout(() => {
-    onlinePredictionTimeoutHandle = null;
-    flushOnlinePredictionWhenDue(setState);
-  }, Math.max(0, normalizedDelayMs - ONLINE_PREDICTION_SPIN_THRESHOLD_MS));
+  clearPredictionLeadClamp();
+  scheduleOnlinePredictionTimer(setState, stepDelayMs);
 }
 
 function flushOnlinePredictionWhenDue(setState: StoreSetState): void {
@@ -789,10 +859,13 @@ function runOnlinePredictionStep(
     return false;
   }
 
-  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit()) {
+  const tickRateMs = onlinePredictionRuntime.game.config.tickRateMs;
+  if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + getPredictionLeadLimit(tickRateMs)) {
+    scheduleOnlinePredictionCapRecheck(setState, tickRateMs);
     return false;
   }
 
+  clearPredictionLeadClamp();
   const previousRuntime = onlinePredictionRuntime;
   const nextRuntime = advanceRuntimeTick(previousRuntime);
   if (nextRuntime.tick === previousRuntime.tick) {
@@ -1077,6 +1150,7 @@ async function startOnlineMatchmaking(
     });
 
     room.onStateChange((networkState) => {
+      const authoritativeReceivedPerfMs = performance.now();
       const currentStore = useLocalGameStore.getState();
       const previousGame = currentStore.gameState;
       const previousDisplayTick = currentStore.online.displayTick;
@@ -1102,6 +1176,20 @@ async function startOnlineMatchmaking(
       const matchingPredictedRuntime = currentStore.online.ownSnakeId
         ? findMatchingPredictedRuntime(tick, nextGame, currentStore.online.ownSnakeId)
         : null;
+
+      const previousAuthoritativePerfMs = onlineLastAuthoritativeReceivedPerfMs;
+      if (previousAuthoritativePerfMs !== null && tick > onlineAuthoritativeTick) {
+        const authoritativeGapMs = Math.max(0, authoritativeReceivedPerfMs - previousAuthoritativePerfMs);
+        onlineMaxAuthoritativeGapMs = Math.max(onlineMaxAuthoritativeGapMs, authoritativeGapMs);
+        if (
+          nextGame.status === "running" &&
+          authoritativeGapMs > Math.round(nextGame.config.tickRateMs * 1.15)
+        ) {
+          onlineLateAuthoritativeUpdateCount += 1;
+        }
+      }
+      onlineLastAuthoritativeReceivedPerfMs = authoritativeReceivedPerfMs;
+      clearPredictionLeadClamp();
 
       onlineAuthoritativeState = nextGame;
       onlineAuthoritativeTick = tick;
@@ -1600,6 +1688,18 @@ function renderGameToText(): string {
     countdown: state.countdown,
     automation: {
       manualTimeControl: localManualTimeControl,
+      onlineNetcode:
+        state.mode === "online"
+          ? {
+              authoritativeGapMs: getCurrentAuthoritativeGapMs(),
+              maxAuthoritativeGapMs: onlineMaxAuthoritativeGapMs,
+              lateAuthoritativeUpdateCount: onlineLateAuthoritativeUpdateCount,
+              leadLimit: getPredictionLeadLimit(state.gameState.config.tickRateMs),
+              leadClampCount: onlinePredictionLeadClampCount,
+              clampActive: onlinePredictionClampActive,
+              maxClampMs: onlineMaxPredictionClampMs,
+            }
+          : null,
     },
     session: state.session,
   };

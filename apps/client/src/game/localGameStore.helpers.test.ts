@@ -427,11 +427,39 @@ describe("network helpers", () => {
     ).toBe(85);
   });
 
-  it("keeps two ticks of headroom across network conditions", () => {
-    expect(resolvePredictionLeadLimit({ latencyMs: null, jitterMs: null })).toBe(2);
-    expect(resolvePredictionLeadLimit({ latencyMs: 70, jitterMs: 10 })).toBe(2);
-    expect(resolvePredictionLeadLimit({ latencyMs: 140, jitterMs: 12 })).toBe(2);
-    expect(resolvePredictionLeadLimit({ latencyMs: 80, jitterMs: 30 })).toBe(2);
+  it("expands prediction headroom when latency or authoritative gaps get risky", () => {
+    expect(
+      resolvePredictionLeadLimit({
+        latencyMs: null,
+        jitterMs: null,
+        tickRateMs: 100,
+        authoritativeGapMs: null,
+      }),
+    ).toBe(2);
+    expect(
+      resolvePredictionLeadLimit({
+        latencyMs: 70,
+        jitterMs: 10,
+        tickRateMs: 100,
+        authoritativeGapMs: null,
+      }),
+    ).toBe(3);
+    expect(
+      resolvePredictionLeadLimit({
+        latencyMs: 45,
+        jitterMs: 8,
+        tickRateMs: 100,
+        authoritativeGapMs: 116,
+      }),
+    ).toBe(3);
+    expect(
+      resolvePredictionLeadLimit({
+        latencyMs: 45,
+        jitterMs: 8,
+        tickRateMs: 100,
+        authoritativeGapMs: 90,
+      }),
+    ).toBe(2);
   });
 
   it("prefers the lowest-rtt recent clock sample", () => {
