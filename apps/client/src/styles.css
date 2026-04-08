@@ -335,11 +335,11 @@ body {
 .touch-dock--floating {
   position: fixed;
   inset-inline: 0;
-  bottom: 0;
+  bottom: env(safe-area-inset-bottom, 0px);
   z-index: 24;
   display: flex;
   justify-content: center;
-  padding: 0 0.75rem env(safe-area-inset-bottom);
+  padding: 0 0.75rem 0;
   pointer-events: none;
 }
 
@@ -1055,7 +1055,7 @@ body {
   }
 
   .touch-dock--floating {
-    padding: 0 0.55rem env(safe-area-inset-bottom);
+    padding-inline: 0.55rem;
   }
 
   .touch-dock__inner--floating-local {
@@ -1127,7 +1127,7 @@ body {
 
 @media (max-height: 640px) {
   .touch-dock--floating {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: 0;
   }
 
   .touch-dock__inner--floating-local {
