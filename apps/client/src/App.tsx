@@ -88,7 +88,8 @@ export function App() {
   const floatingTouchOnline = touchMode === "online" && !touchOnlineFocusMode;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
-  const showTouchArenaSummary = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchFocusMode;
+  const showDesktopArenaHud = desktopGameMode;
+  const showTouchArenaHud = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchFocusMode;
   const shouldLockBodyScroll = Boolean(touchMode) || immersiveDesktopMode;
   const arenaSizeClass =
     touchFocusMode
@@ -96,16 +97,23 @@ export function App() {
       : splitTouchLocal
         ? "h-[min(68svh,18rem)] min-h-[12.5rem] sm:h-[min(72svh,20rem)]"
         : floatingTouchLocal
-          ? "h-[min(40svh,17rem)] min-h-[12rem] sm:h-[min(44svh,19rem)]"
+          ? "h-[min(50svh,19rem)] min-h-[14rem] sm:h-[min(52svh,20rem)]"
           : touchMode === "online"
-            ? "h-[min(48svh,20rem)] min-h-[13rem] sm:h-[min(54svh,22rem)]"
+            ? "h-[min(54svh,21rem)] min-h-[14rem] sm:h-[min(56svh,23rem)]"
             : immersiveDesktopMode
-              ? "h-[calc(100svh-2.25rem)] min-h-[30rem]"
+              ? "h-[calc(100svh-7rem)] min-h-[33rem]"
               : desktopGameMode
-                ? "h-[min(calc(100svh-4rem),54rem)] min-h-[28rem]"
+                ? "h-[min(calc(100svh-10rem),44rem)] min-h-[29rem]"
                 : mobileMenu
                   ? "h-[min(50svh,18rem)] min-h-[17rem]"
                   : "h-[min(62vh,32rem)] min-h-[360px] xl:h-[min(66vh,38rem)]";
+  const arenaViewportClass = touchFocusMode
+    ? "aspect-square h-full max-h-full w-full max-w-full"
+    : immersiveDesktopMode
+      ? "aspect-square h-full w-auto max-h-full max-w-full"
+      : desktopGameMode
+        ? "aspect-square h-full w-auto max-h-[42rem] max-w-full"
+        : "aspect-square h-full w-auto max-h-full max-w-full";
   const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
   const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
   const onlineSeatLabel = isOnline && online.ownSnakeId ? online.ownSnakeId.toUpperCase() : null;
@@ -236,7 +244,7 @@ export function App() {
             : immersiveDesktopMode
               ? "max-w-none gap-2"
               : desktopGameMode
-                ? "max-w-[76rem] gap-3"
+                ? "max-w-[72rem] gap-3"
                 : splitTouchLocal
                   ? "max-w-6xl gap-2 sm:gap-3"
                   : "gap-5"
@@ -277,6 +285,76 @@ export function App() {
           </header>
         ) : null}
 
+        {showDesktopArenaHud ? (
+          <div data-arena-hud="desktop" className="glass-panel arena-hud">
+            <div className="arena-hud__stack">
+              <div className="arena-hud__cluster">
+                <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
+                {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
+                <InfoChip label={`Session ${sessionScoreLabel}`} compact />
+                {onlineSeatLabel ? <InfoChip label={onlineSeatLabel} compact /> : null}
+                {desktopStatusChip ? (
+                  <InfoChip label={desktopStatusChip} accent="orange" compact />
+                ) : null}
+              </div>
+            </div>
+
+            <div className="arena-hud__stack arena-hud__stack--end">
+              <div className="arena-hud__scores">
+                <CompactArenaScore
+                  title="J1"
+                  value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
+                  accent="teal"
+                />
+                <CompactArenaScore
+                  title="J2"
+                  value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
+                  accent="orange"
+                />
+              </div>
+              <div className="arena-hud__cluster arena-hud__cluster--actions">
+                {canPauseLocal ? (
+                  <ToolbarButton onClick={togglePause}>
+                    {paused ? "Reprendre" : "Pause"}
+                  </ToolbarButton>
+                ) : null}
+                {fullscreen.supported ? (
+                  <ToolbarButton onClick={handleToggleFullscreen}>
+                    {fullscreen.active ? "Quitter plein ecran" : "Plein ecran"}
+                  </ToolbarButton>
+                ) : null}
+                <ToolbarButton onClick={returnToMenu}>
+                  {isOnline ? "Quitter" : "Menu"}
+                </ToolbarButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showTouchArenaHud ? (
+          <div data-arena-hud="touch" className="glass-panel arena-hud arena-hud--touch">
+            <div className="arena-hud__stack">
+              <div className="arena-hud__cluster">
+                <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
+                {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
+                <InfoChip label={touchSummaryLabel} compact />
+              </div>
+              <div className="arena-hud__scores arena-hud__scores--touch">
+                <CompactArenaScore
+                  title="J1"
+                  value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
+                  accent="teal"
+                />
+                <CompactArenaScore
+                  title="J2"
+                  value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
+                  accent="orange"
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <section
           className={`glass-panel relative overflow-hidden ${
             touchFocusMode
@@ -289,76 +367,8 @@ export function App() {
           } ${arenaSizeClass}`}
         >
           <div className="relative h-full w-full overflow-hidden rounded-[1.35rem] border border-slate-700/60 bg-[#020611]/78">
-            {desktopGameMode ? (
-              <div className="arena-topbar">
-                <div className="arena-topbar__cluster">
-                  <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
-                  {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
-                  <InfoChip label={`Session ${sessionScoreLabel}`} compact />
-                  {onlineSeatLabel ? <InfoChip label={onlineSeatLabel} compact /> : null}
-                  {desktopStatusChip ? (
-                    <InfoChip label={desktopStatusChip} accent="orange" compact />
-                  ) : null}
-                </div>
-
-                <div className="arena-topbar__cluster arena-topbar__cluster--end">
-                  <CompactArenaScore
-                    title="J1"
-                    value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
-                    accent="teal"
-                  />
-                  <CompactArenaScore
-                    title="J2"
-                    value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
-                    accent="orange"
-                  />
-                  {canPauseLocal ? (
-                    <ToolbarButton onClick={togglePause}>
-                      {paused ? "Reprendre" : "Pause"}
-                    </ToolbarButton>
-                  ) : null}
-                  {fullscreen.supported ? (
-                    <ToolbarButton onClick={handleToggleFullscreen}>
-                      {fullscreen.active ? "Quitter plein ecran" : "Plein ecran"}
-                    </ToolbarButton>
-                  ) : null}
-                  <ToolbarButton onClick={returnToMenu}>
-                    {isOnline ? "Quitter" : "Menu"}
-                  </ToolbarButton>
-                </div>
-              </div>
-            ) : null}
-
-            {showTouchArenaSummary ? (
-              <div className="arena-summary">
-                <div className="arena-summary__chips">
-                  <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
-                  {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
-                  <InfoChip label={touchSummaryLabel} compact />
-                </div>
-                <div className="arena-summary__scores">
-                  <CompactArenaScore
-                    title="J1"
-                    value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
-                    accent="teal"
-                  />
-                  <CompactArenaScore
-                    title="J2"
-                    value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
-                    accent="orange"
-                  />
-                </div>
-              </div>
-            ) : null}
-
             <div className={`h-full w-full ${desktopGameMode || touchFocusMode ? "grid place-items-center" : ""}`}>
-              <div
-                className={
-                  desktopGameMode || touchFocusMode
-                    ? "aspect-square h-full max-h-full w-full max-w-full"
-                    : "h-full w-full"
-                }
-              >
+              <div className={desktopGameMode || touchMode ? arenaViewportClass : "h-full w-full"}>
                 {shouldRenderPhaser ? (
                   <Suspense
                     fallback={

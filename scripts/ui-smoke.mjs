@@ -41,6 +41,7 @@ try {
 
   const results = [];
   results.push(await runMenuScenario());
+  results.push(await runDesktopLocalScenario());
   results.push(await runMobileMenuScenario());
   results.push(await runMobileLocalScenario());
   results.push(await runMobileLocalFullscreenScenario());
@@ -215,6 +216,44 @@ async function runMenuScenario() {
   return { scenario: "desktop-menu", screenshotPath, snapshot, issues };
 }
 
+async function runDesktopLocalScenario() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Local/i }).click();
+  await page.waitForTimeout(1200);
+
+  const snapshot = await collectSnapshot(page);
+  const screenshotPath = path.join(artifactsDir, "desktop-local.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion(
+    "desktop local keeps the hud outside the playfield",
+    (snapshot.hud?.bottom ?? 0) <= (snapshot.section?.top ?? Number.POSITIVE_INFINITY) + 1,
+    { hud: snapshot.hud, section: snapshot.section },
+  );
+  pushAssertion(
+    "desktop local keeps the square canvas inside the panel height",
+    (snapshot.canvas?.cssHeight ?? Number.POSITIVE_INFINITY) <=
+      (snapshot.section?.height ?? Number.NEGATIVE_INFINITY) + 1,
+    { canvas: snapshot.canvas, section: snapshot.section },
+  );
+  pushAssertion(
+    "desktop local keeps the square canvas visible",
+    !snapshot.canvas?.outOfViewport,
+    snapshot.canvas,
+  );
+  pushAssertion("desktop local has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "desktop-local", screenshotPath, snapshot, issues };
+}
+
 async function runMobileMenuScenario() {
   const browser = await webkit.launch({ headless: true });
   const context = await browser.newContext({ ...devices["iPhone SE"] });
@@ -255,6 +294,16 @@ async function runMobileLocalScenario() {
   pushAssertion("mobile local has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
   pushAssertion("mobile local dock fits viewport", !snapshot.touchDock?.outOfViewport, snapshot.touchDock);
   pushAssertion("mobile local controls fit viewport", allButtonsFit(snapshot), snapshot.buttons);
+  pushAssertion(
+    "mobile local keeps the hud outside the playfield",
+    (snapshot.hud?.bottom ?? 0) <= (snapshot.section?.top ?? Number.POSITIVE_INFINITY) + 1,
+    { hud: snapshot.hud, section: snapshot.section },
+  );
+  pushAssertion(
+    "mobile local keeps a readable playfield size",
+    (snapshot.canvas?.cssHeight ?? 0) >= 240,
+    snapshot.canvas,
+  );
   pushAssertion("mobile local keeps game visible", (snapshot.section?.bottom ?? 0) < snapshot.viewport.height, snapshot.section);
   pushAssertion("mobile local has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
 
@@ -578,6 +627,7 @@ async function collectSnapshot(page) {
     const documentEl = document.scrollingElement || document.documentElement;
     const selectors = {
       header: "header.glass-panel",
+      hud: "[data-arena-hud]",
       section: "section.glass-panel",
       footer: "footer.glass-panel",
       touchDock: ".touch-dock",
@@ -648,6 +698,7 @@ async function collectSnapshot(page) {
       },
       coarsePointer: window.matchMedia("(pointer: coarse)").matches,
       header: rectOf(selectors.header),
+      hud: rectOf(selectors.hud),
       section: rectOf(selectors.section),
       footer: rectOf(selectors.footer),
       touchDock: rectOf(selectors.touchDock),
@@ -665,10 +716,17 @@ async function collectSnapshot(page) {
         return {
           cssWidth,
           cssHeight,
+          top: Math.round(rect.top),
+          bottom: Math.round(rect.bottom),
           backingWidth: canvas.width,
           backingHeight: canvas.height,
           backingScaleX: Number((canvas.width / Math.max(rect.width, 1)).toFixed(2)),
           backingScaleY: Number((canvas.height / Math.max(rect.height, 1)).toFixed(2)),
+          outOfViewport:
+            rect.x < -1 ||
+            rect.y < -1 ||
+            rect.right > window.innerWidth + 1 ||
+            rect.bottom > window.innerHeight + 1,
         };
       })(),
       buttons,
