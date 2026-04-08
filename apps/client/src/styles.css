@@ -398,6 +398,7 @@ body {
 }
 
 .touch-dock__inner--floating-local .touch-pad__matrix {
+  aspect-ratio: auto;
   min-height: min(34vw, 7rem);
   gap: 0.3rem;
 }
