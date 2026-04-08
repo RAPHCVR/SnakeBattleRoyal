@@ -25,6 +25,7 @@ const PhaserViewport = lazy(loadPhaserViewport);
 
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
+  const [localFocusMode, setLocalFocusMode] = useState(false);
   const [onlineFocusMode, setOnlineFocusMode] = useState(false);
 
   useKeyboardControls();
@@ -74,21 +75,23 @@ export function App() {
     !showOnlineWaiting &&
     (isLocal || isOnline);
   const touchMode = coarsePointer ? (isLocal ? "local" : isOnline ? "online" : null) : null;
+  const touchLocalFocusMode = touchMode === "local" && localFocusMode;
   const touchOnlineFocusMode = touchMode === "online" && onlineFocusMode;
+  const touchFocusMode = touchLocalFocusMode || touchOnlineFocusMode;
   const splitTouchLocal = touchMode === "local" && orientation === "landscape";
   const showTouchControls =
     Boolean(touchMode) && !isMenu && !isMatchmaking && gameState.status !== "game_over";
   const desktopGameMode = !isMenu && !touchMode;
   const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
-  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal;
+  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalFocusMode;
   const floatingTouchOnline = touchMode === "online" && !touchOnlineFocusMode;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
-  const showTouchArenaSummary = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchOnlineFocusMode;
+  const showTouchArenaSummary = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchFocusMode;
   const shouldLockBodyScroll = Boolean(touchMode) || immersiveDesktopMode;
   const arenaSizeClass =
-    touchOnlineFocusMode
+    touchFocusMode
       ? "h-full min-h-0"
       : splitTouchLocal
         ? "h-[min(68svh,18rem)] min-h-[12.5rem] sm:h-[min(72svh,20rem)]"
@@ -144,13 +147,17 @@ export function App() {
         : isOnline
           ? [onlineSeatLabel ?? "Online", connectionWarning].filter(Boolean).join(" • ")
           : "Ready";
-  const touchFullscreenEnabled =
-    touchMode === "online" ? true : Boolean(touchMode) && fullscreen.supported;
+  const touchFullscreenEnabled = Boolean(touchMode);
 
   const handleToggleFullscreen = () => {
     void fullscreen.toggle(shellRef.current);
   };
   const handleToggleTouchFullscreen = () => {
+    if (touchMode === "local") {
+      setLocalFocusMode((current) => !current);
+      return;
+    }
+
     if (touchMode === "online") {
       setOnlineFocusMode((current) => !current);
       return;
@@ -177,7 +184,8 @@ export function App() {
   }, [shouldLockBodyScroll]);
 
   useEffect(() => {
-    if (mode !== "online" || !coarsePointer) {
+    if (!coarsePointer || (mode !== "online" && mode !== "local")) {
+      setLocalFocusMode(false);
       setOnlineFocusMode(false);
     }
   }, [coarsePointer, mode]);
@@ -217,13 +225,13 @@ export function App() {
               : touchMode === "online"
                 ? "app-shell--touch-online"
                 : ""
-      } ${touchOnlineFocusMode ? "app-shell--touch-online-focus" : ""} ${
+      } ${touchFocusMode ? "app-shell--touch-immersive" : ""} ${
         floatingTouchLocal ? "app-shell--floating-local-dock" : ""
       } ${floatingTouchOnline ? "app-shell--floating-online-dock" : ""}`}
     >
       <div
         className={`mx-auto flex w-full flex-col ${
-          touchOnlineFocusMode
+          touchFocusMode
             ? "h-full max-w-none gap-3"
             : immersiveDesktopMode
               ? "max-w-none gap-2"
@@ -271,7 +279,7 @@ export function App() {
 
         <section
           className={`glass-panel relative overflow-hidden ${
-            touchOnlineFocusMode
+            touchFocusMode
               ? "flex-1 min-h-0 p-2 sm:p-3"
               : desktopGameMode
                 ? "p-2.5 sm:p-3"
@@ -343,10 +351,10 @@ export function App() {
               </div>
             ) : null}
 
-            <div className={`h-full w-full ${desktopGameMode || touchOnlineFocusMode ? "grid place-items-center" : ""}`}>
+            <div className={`h-full w-full ${desktopGameMode || touchFocusMode ? "grid place-items-center" : ""}`}>
               <div
                 className={
-                  desktopGameMode || touchOnlineFocusMode
+                  desktopGameMode || touchFocusMode
                     ? "aspect-square h-full max-h-full w-full max-w-full"
                     : "h-full w-full"
                 }
@@ -558,9 +566,9 @@ export function App() {
               paused={paused}
               showPauseAction={canPauseLocal}
               onTogglePause={togglePause}
-              fullscreenSupported={fullscreen.supported}
-              fullscreenActive={fullscreen.active}
-              onToggleFullscreen={handleToggleFullscreen}
+              fullscreenSupported
+              fullscreenActive={touchLocalFocusMode}
+              onToggleFullscreen={handleToggleTouchFullscreen}
             />
           ) : showTouchControls && touchMode ? (
             <TouchControlsDock
@@ -569,7 +577,7 @@ export function App() {
               compact={floatingTouchLocal}
               suggestLandscape={touchMode === "local"}
               fullscreenSupported={touchFullscreenEnabled}
-              fullscreenActive={touchMode === "online" ? touchOnlineFocusMode : fullscreen.active}
+              fullscreenActive={touchMode === "online" ? touchOnlineFocusMode : touchLocalFocusMode}
               onToggleFullscreen={handleToggleTouchFullscreen}
               {...(touchMode === "local" && canPauseLocal
                 ? {

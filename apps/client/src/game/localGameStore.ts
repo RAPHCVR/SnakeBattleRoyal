@@ -129,6 +129,7 @@ const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_PREDICTION_BUFFER_MS = 6;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 12;
 const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
+const ONLINE_INPUT_REACTION_DELAY_MS = 16;
 const ROUND_START_COUNTDOWN_MS = 3_000;
 
 let localLoopHandle: number | null = null;
@@ -141,6 +142,7 @@ let browserTransportPatched = false;
 let localManualTimeControl = false;
 let localManualTimeRemainderMs = 0;
 let onlinePredictionTimeoutHandle: number | null = null;
+let onlinePredictionDueAtMs: number | null = null;
 let onlinePingIntervalHandle: number | null = null;
 let onlinePredictionRuntime: EngineRuntime | null = null;
 let onlineAuthoritativeState: GameState | null = null;
@@ -353,6 +355,7 @@ function stopOnlinePredictionLoop(): void {
 
   window.clearTimeout(onlinePredictionTimeoutHandle);
   onlinePredictionTimeoutHandle = null;
+  onlinePredictionDueAtMs = null;
 }
 
 function stopOnlinePingLoop(): void {
@@ -467,6 +470,13 @@ function computePredictionDelayMs(tickRateMs: number): number {
   return Math.max(ONLINE_MIN_PREDICTION_DELAY_MS, Math.min(tickRateMs, estimatedDelay));
 }
 
+function getInputReactionPredictionDelayMs(tickRateMs: number): number {
+  return Math.min(
+    computePredictionDelayMs(tickRateMs),
+    Math.max(8, Math.min(tickRateMs, ONLINE_INPUT_REACTION_DELAY_MS)),
+  );
+}
+
 function getOwnProcessedSequence(
   ownSnakeId: SnakeId | null,
   processedInputs: ProcessedInputSequences,
@@ -552,23 +562,38 @@ function scheduleOnlinePredictionStep(
   setState: StoreSetState,
   stepDelayMs: number,
 ): void {
-  stopOnlinePredictionLoop();
-
   const state = storeGetState?.();
   if (!state || state.mode !== "online" || state.gameState.status !== "running") {
+    stopOnlinePredictionLoop();
     return;
   }
 
   if (!onlinePredictionRuntime) {
+    stopOnlinePredictionLoop();
     return;
   }
 
   if (onlinePredictionRuntime.tick >= onlineAuthoritativeTick + ONLINE_MAX_PREDICTION_LEAD_TICKS) {
+    stopOnlinePredictionLoop();
     return;
   }
 
+  const normalizedDelayMs = Math.max(1, Math.round(stepDelayMs));
+  const nextDueAtMs = performance.now() + normalizedDelayMs;
+  if (
+    onlinePredictionTimeoutHandle !== null &&
+    onlinePredictionDueAtMs !== null &&
+    onlinePredictionDueAtMs <= nextDueAtMs + 1
+  ) {
+    return;
+  }
+
+  stopOnlinePredictionLoop();
+  onlinePredictionDueAtMs = nextDueAtMs;
+
   onlinePredictionTimeoutHandle = window.setTimeout(() => {
     onlinePredictionTimeoutHandle = null;
+    onlinePredictionDueAtMs = null;
     const advanced = runOnlinePredictionStep(setState, stepDelayMs);
     if (!advanced) {
       return;
@@ -1208,6 +1233,8 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
           ),
         }),
       }));
+
+      scheduleOnlinePredictionStep(set, getInputReactionPredictionDelayMs(state.gameState.config.tickRateMs));
       return true;
     },
     togglePause: () => {

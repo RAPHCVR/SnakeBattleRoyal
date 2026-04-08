@@ -1,11 +1,13 @@
 import Phaser from "phaser";
 import { SnakeArenaScene } from "./SnakeArenaScene.js";
-import { WORLD_HEIGHT_PX, WORLD_WIDTH_PX } from "./constants.js";
+import type { PhaserCanvasSize } from "./canvasSizing.js";
 
-export function createPhaserGame(parent: HTMLElement): Phaser.Game {
+export function createPhaserGame(parent: HTMLElement, canvasSize: PhaserCanvasSize): Phaser.Game {
   return new Phaser.Game({
     type: Phaser.AUTO,
     parent,
+    width: canvasSize.backingWidth,
+    height: canvasSize.backingHeight,
     backgroundColor: "#050a16",
     audio: {
       noAudio: true,
@@ -13,15 +15,15 @@ export function createPhaserGame(parent: HTMLElement): Phaser.Game {
     banner: false,
     scene: [SnakeArenaScene],
     scale: {
-      mode: Phaser.Scale.FIT,
+      mode: Phaser.Scale.NONE,
       autoCenter: Phaser.Scale.CENTER_BOTH,
-      width: WORLD_WIDTH_PX,
-      height: WORLD_HEIGHT_PX,
+      width: canvasSize.backingWidth,
+      height: canvasSize.backingHeight,
     },
     render: {
       antialias: true,
       pixelArt: false,
-      roundPixels: false,
+      roundPixels: true,
     },
     fps: {
       target: 120,

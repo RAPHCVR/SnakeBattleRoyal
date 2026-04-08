@@ -43,6 +43,7 @@ try {
   results.push(await runMenuScenario());
   results.push(await runMobileMenuScenario());
   results.push(await runMobileLocalScenario());
+  results.push(await runMobileLocalFullscreenScenario());
   results.push(await runAutomationHooksScenario());
   results.push(await runMobileLocalGameOverScenario());
   results.push(await runAndroidPortraitScenario());
@@ -263,6 +264,43 @@ async function runMobileLocalScenario() {
   return { scenario: "mobile-local-iphone-se", screenshotPath, snapshot, issues };
 }
 
+async function runMobileLocalFullscreenScenario() {
+  const browser = await webkit.launch({ headless: true });
+  const context = await browser.newContext({ ...devices["iPhone SE"] });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Local/i }).click();
+  await page.waitForTimeout(1200);
+  await page.getByRole("button", { name: /Plein ecran/i }).click();
+  await page.waitForTimeout(350);
+
+  const snapshot = await collectSnapshot(page);
+  const screenshotPath = path.join(artifactsDir, "mobile-local-iphone-se-fullscreen.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion("mobile local fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion("mobile local fullscreen keeps the dock within viewport", !snapshot.touchDock?.outOfViewport, snapshot.touchDock);
+  pushAssertion("mobile local fullscreen keeps the arena within viewport", !snapshot.section?.outOfViewport, snapshot.section);
+  pushAssertion(
+    "mobile local fullscreen keeps a dense backing canvas",
+    (snapshot.canvas?.backingScaleX ?? 0) >= 1 && (snapshot.canvas?.backingScaleX ?? 0) <= 2.05,
+    snapshot.canvas,
+  );
+  pushAssertion(
+    "mobile local fullscreen exposes an exit action",
+    snapshot.buttons.some((button) => /quitter/i.test(button.text)),
+    snapshot.buttons,
+  );
+  pushAssertion("mobile local fullscreen has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "mobile-local-iphone-se-fullscreen", screenshotPath, snapshot, issues };
+}
+
 async function runAutomationHooksScenario() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
@@ -441,6 +479,12 @@ async function runOnlineWaitingScenario() {
 
   pushAssertion("online waiting keeps a waiting message visible", /en attente d'un adversaire/i.test(bodyText), bodyText);
   pushAssertion("online waiting keeps a room exit CTA", /quitter la room/i.test(bodyText), bodyText);
+  pushAssertion(
+    "online waiting keeps the phaser canvas backing store at or above display density",
+    (snapshot.canvas?.backingWidth ?? 0) >= (snapshot.canvas?.cssWidth ?? 0) &&
+      (snapshot.canvas?.backingHeight ?? 0) >= (snapshot.canvas?.cssHeight ?? 0),
+    snapshot.canvas,
+  );
   pushAssertion("online waiting has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
   pushAssertion("online waiting has no request failures", issues.requestFailures.length === 0, issues.requestFailures);
 
@@ -608,6 +652,25 @@ async function collectSnapshot(page) {
       footer: rectOf(selectors.footer),
       touchDock: rectOf(selectors.touchDock),
       touchSideControls: rectOf(selectors.touchSideControls),
+      canvas: (() => {
+        const canvas = document.querySelector(".phaser-viewport canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) {
+          return null;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        const cssWidth = Math.round(rect.width);
+        const cssHeight = Math.round(rect.height);
+
+        return {
+          cssWidth,
+          cssHeight,
+          backingWidth: canvas.width,
+          backingHeight: canvas.height,
+          backingScaleX: Number((canvas.width / Math.max(rect.width, 1)).toFixed(2)),
+          backingScaleY: Number((canvas.height / Math.max(rect.height, 1)).toFixed(2)),
+        };
+      })(),
       buttons,
     };
   });

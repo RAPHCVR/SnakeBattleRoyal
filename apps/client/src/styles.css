@@ -58,7 +58,8 @@ body {
   padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
 }
 
-.app-shell--touch-online-focus {
+.app-shell--touch-online-focus,
+.app-shell--touch-immersive {
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -74,6 +75,16 @@ body {
     radial-gradient(circle at 80% 20%, rgba(245, 158, 11, 0.12), transparent 38%),
     radial-gradient(circle at 40% 95%, rgba(56, 189, 248, 0.1), transparent 35%),
     #030712;
+}
+
+.phaser-viewport {
+  overflow: hidden;
+}
+
+.phaser-viewport canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .app-shell--touch-side {

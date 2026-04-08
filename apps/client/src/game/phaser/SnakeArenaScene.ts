@@ -2,13 +2,16 @@ import type { GameState, GridPosition, SnakeState } from "@snake-duel/shared";
 import Phaser from "phaser";
 import { useLocalGameStore } from "../localGameStore.js";
 import {
-  CELL_SIZE_PX,
   FOOD_PARTICLE_TEXTURE,
   GRID_HEIGHT,
   GRID_WIDTH,
-  WORLD_HEIGHT_PX,
-  WORLD_WIDTH_PX,
 } from "./constants.js";
+import {
+  computeArenaBoardLayout,
+  getBoardSegmentSize,
+  toBoardPosition,
+  type ArenaBoardLayout,
+} from "./boardLayout.js";
 
 type SegmentNode = Phaser.GameObjects.Rectangle;
 
@@ -26,25 +29,53 @@ const PALETTE = {
 
 export class SnakeArenaScene extends Phaser.Scene {
   private readonly segments = new Map<string, SegmentNode>();
+  private boardGraphics: Phaser.GameObjects.Graphics | null = null;
   private foodNode: Phaser.GameObjects.Arc | null = null;
   private foodPulseTween: Phaser.Tweens.Tween | null = null;
+  private layout: ArenaBoardLayout | null = null;
   private renderVersion = -1;
+  private snapNextRender = false;
 
   public constructor() {
     super({ key: "SnakeArenaScene" });
   }
 
   public create(): void {
-    this.drawBoardBackground();
+    this.boardGraphics = this.add.graphics().setDepth(0);
     this.ensureParticleTexture();
-    this.renderFromStore(true);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
+    this.handleResize();
   }
 
   public override update(): void {
     this.renderFromStore(false);
   }
 
+  private handleResize(): void {
+    this.layout = computeArenaBoardLayout({
+      width: this.scale.width,
+      height: this.scale.height,
+    });
+    this.drawBoardBackground();
+    this.snapNextRender = true;
+    this.renderFromStore(true);
+  }
+
+  private handleShutdown(): void {
+    this.scale.off(Phaser.Scale.Events.RESIZE, this.handleResize, this);
+    this.foodPulseTween?.stop();
+    this.foodPulseTween = null;
+    this.boardGraphics = null;
+    this.layout = null;
+  }
+
   private renderFromStore(force: boolean): void {
+    const layout = this.layout;
+    if (!layout) {
+      return;
+    }
+
     const storeState = useLocalGameStore.getState();
     if (!force && storeState.renderVersion === this.renderVersion) {
       return;
@@ -54,14 +85,16 @@ export class SnakeArenaScene extends Phaser.Scene {
     const state = storeState.gameState;
     const transition = storeState.transition;
     const previous = transition?.previous;
+    const snapPositions = force || this.snapNextRender;
 
-    this.syncFood(state, previous);
-    this.syncSnakes(state, previous);
+    this.syncFood(state, previous, layout, snapPositions);
+    this.syncSnakes(state, previous, layout, snapPositions);
+    this.snapNextRender = false;
 
-    if (transition?.foodEatenAt) {
+    if (!force && transition?.foodEatenAt) {
       this.playEatBurst(transition.foodEatenAt);
     }
-    if (transition?.fatalCollision) {
+    if (!force && transition?.fatalCollision) {
       this.time.delayedCall(state.config.tickRateMs, () => {
         this.cameras.main.shake(200, 0.01);
       });
@@ -69,22 +102,49 @@ export class SnakeArenaScene extends Phaser.Scene {
   }
 
   private drawBoardBackground(): void {
-    const graphics = this.add.graphics();
-    graphics.fillStyle(PALETTE.board, 1);
-    graphics.fillRoundedRect(0, 0, WORLD_WIDTH_PX, WORLD_HEIGHT_PX, 18);
-    graphics.lineStyle(3, PALETTE.boardBorder, 0.9);
-    graphics.strokeRoundedRect(0, 0, WORLD_WIDTH_PX, WORLD_HEIGHT_PX, 18);
-    graphics.lineStyle(1, PALETTE.gridLine, 0.35);
+    if (!this.boardGraphics || !this.layout) {
+      return;
+    }
 
+    const graphics = this.boardGraphics;
+    const layout = this.layout;
+    const borderOffset = layout.borderWidth % 2 === 1 ? 0.5 : 0;
+    const gridOffset = layout.gridLineWidth % 2 === 1 ? 0.5 : 0;
+
+    graphics.clear();
+    graphics.fillStyle(PALETTE.board, 1);
+    graphics.fillRoundedRect(
+      layout.offsetX,
+      layout.offsetY,
+      layout.boardWidth,
+      layout.boardHeight,
+      layout.borderRadius,
+    );
+    graphics.lineStyle(layout.borderWidth, PALETTE.boardBorder, 0.9);
+    graphics.strokeRoundedRect(
+      layout.offsetX + borderOffset,
+      layout.offsetY + borderOffset,
+      layout.boardWidth - borderOffset * 2,
+      layout.boardHeight - borderOffset * 2,
+      layout.borderRadius,
+    );
+    graphics.lineStyle(layout.gridLineWidth, PALETTE.gridLine, 0.35);
     for (let x = 1; x < GRID_WIDTH; x += 1) {
-      graphics.lineBetween(x * CELL_SIZE_PX, 0, x * CELL_SIZE_PX, WORLD_HEIGHT_PX);
+      const lineX = layout.offsetX + x * layout.cellSize + gridOffset;
+      graphics.lineBetween(lineX, layout.offsetY, lineX, layout.offsetY + layout.boardHeight);
     }
     for (let y = 1; y < GRID_HEIGHT; y += 1) {
-      graphics.lineBetween(0, y * CELL_SIZE_PX, WORLD_WIDTH_PX, y * CELL_SIZE_PX);
+      const lineY = layout.offsetY + y * layout.cellSize + gridOffset;
+      graphics.lineBetween(layout.offsetX, lineY, layout.offsetX + layout.boardWidth, lineY);
     }
   }
 
-  private syncFood(state: GameState, previous: GameState | undefined): void {
+  private syncFood(
+    state: GameState,
+    previous: GameState | undefined,
+    layout: ArenaBoardLayout,
+    snapPositions: boolean,
+  ): void {
     const food = state.food;
     if (!food) {
       this.foodNode?.destroy();
@@ -94,16 +154,19 @@ export class SnakeArenaScene extends Phaser.Scene {
       return;
     }
 
-    const target = toWorldPosition(food);
+    const target = toBoardPosition(layout, food);
     if (!this.foodNode) {
-      this.foodNode = this.add.circle(target.x, target.y, CELL_SIZE_PX * 0.22, PALETTE.food);
+      this.foodNode = this.add
+        .circle(target.x, target.y, layout.foodRadius, PALETTE.food)
+        .setDepth(12);
       this.startFoodPulse();
       return;
     }
 
+    this.foodNode.setRadius(layout.foodRadius);
     const previousFood = previous?.food;
     const moved = Boolean(previousFood && (previousFood.x !== food.x || previousFood.y !== food.y));
-    if (moved) {
+    if (snapPositions || moved) {
       this.foodNode.setPosition(target.x, target.y);
       this.startFoodPulse();
     } else {
@@ -111,7 +174,12 @@ export class SnakeArenaScene extends Phaser.Scene {
     }
   }
 
-  private syncSnakes(state: GameState, previous: GameState | undefined): void {
+  private syncSnakes(
+    state: GameState,
+    previous: GameState | undefined,
+    layout: ArenaBoardLayout,
+    snapPositions: boolean,
+  ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
 
@@ -126,17 +194,17 @@ export class SnakeArenaScene extends Phaser.Scene {
         activeKeys.add(key);
 
         const visualAlive = didSnakeDieThisTick(previousSnake, snake) ? true : snake.alive;
-        const node = this.ensureSegmentNode(key, snake, index, visualAlive);
-        const target = toWorldPosition(segment);
+        const node = this.ensureSegmentNode(key, snake, index, visualAlive, layout);
+        const target = toBoardPosition(layout, segment);
         const from = previousSnake?.body[index];
 
         this.tweens.killTweensOf(node);
-        if (!from) {
+        if (snapPositions || !from) {
           node.setPosition(target.x, target.y);
           continue;
         }
 
-        const wrapAnimation = getWrapAnimation(from, segment);
+        const wrapAnimation = getWrapAnimation(from, segment, layout);
         if (wrapAnimation) {
           this.playWrapTween(node, wrapAnimation, state.config.tickRateMs);
           continue;
@@ -166,9 +234,10 @@ export class SnakeArenaScene extends Phaser.Scene {
     snake: SnakeState,
     index: number,
     visualAlive: boolean,
+    layout: ArenaBoardLayout,
   ): SegmentNode {
     const existing = this.segments.get(key);
-    const size = index === 0 ? CELL_SIZE_PX * 0.86 : CELL_SIZE_PX * 0.74;
+    const size = getBoardSegmentSize(layout, index);
     const color = getSnakeColor(snake, index, visualAlive);
     if (existing) {
       existing
@@ -238,17 +307,22 @@ export class SnakeArenaScene extends Phaser.Scene {
   }
 
   private playEatBurst(cell: GridPosition): void {
-    const world = toWorldPosition(cell);
+    const layout = this.layout;
+    if (!layout) {
+      return;
+    }
+
+    const world = toBoardPosition(layout, cell);
     const emitter = this.add
       .particles(world.x, world.y, FOOD_PARTICLE_TEXTURE, {
-      emitting: false,
-      lifespan: 260,
-      speed: { min: 30, max: 180 },
-      scale: { start: 0.65, end: 0 },
-      quantity: 18,
-      angle: { min: 0, max: 360 },
-      tint: [0xfcd34d, 0xf59e0b, 0xfbbf24],
-      blendMode: "ADD",
+        emitting: false,
+        lifespan: 260,
+        speed: { min: layout.cellSize * 0.9, max: layout.cellSize * 5.6 },
+        scale: { start: 0.65, end: 0 },
+        quantity: 18,
+        angle: { min: 0, max: 360 },
+        tint: [0xfcd34d, 0xf59e0b, 0xfbbf24],
+        blendMode: "ADD",
       })
       .setDepth(14);
 
@@ -257,13 +331,6 @@ export class SnakeArenaScene extends Phaser.Scene {
     emitter.explode(18);
     this.time.delayedCall(360, () => emitter.destroy());
   }
-}
-
-function toWorldPosition(position: GridPosition): { x: number; y: number } {
-  return {
-    x: position.x * CELL_SIZE_PX + CELL_SIZE_PX / 2,
-    y: position.y * CELL_SIZE_PX + CELL_SIZE_PX / 2,
-  };
 }
 
 function getSnakeColor(snake: SnakeState, index: number, alive: boolean): number {
@@ -286,37 +353,41 @@ interface WrapAnimation {
   readonly target: { x: number; y: number };
 }
 
-function getWrapAnimation(from: GridPosition, to: GridPosition): WrapAnimation | null {
-  const target = toWorldPosition(to);
+function getWrapAnimation(
+  from: GridPosition,
+  to: GridPosition,
+  layout: ArenaBoardLayout,
+): WrapAnimation | null {
+  const target = toBoardPosition(layout, to);
 
   if (from.x === GRID_WIDTH - 1 && to.x === 0 && from.y === to.y) {
     return {
-      exit: { x: WORLD_WIDTH_PX + CELL_SIZE_PX / 2, y: target.y },
-      entry: { x: -CELL_SIZE_PX / 2, y: target.y },
+      exit: { x: layout.offsetX + layout.boardWidth + layout.wrapPadding, y: target.y },
+      entry: { x: layout.offsetX - layout.wrapPadding, y: target.y },
       target,
     };
   }
 
   if (from.x === 0 && to.x === GRID_WIDTH - 1 && from.y === to.y) {
     return {
-      exit: { x: -CELL_SIZE_PX / 2, y: target.y },
-      entry: { x: WORLD_WIDTH_PX + CELL_SIZE_PX / 2, y: target.y },
+      exit: { x: layout.offsetX - layout.wrapPadding, y: target.y },
+      entry: { x: layout.offsetX + layout.boardWidth + layout.wrapPadding, y: target.y },
       target,
     };
   }
 
   if (from.y === GRID_HEIGHT - 1 && to.y === 0 && from.x === to.x) {
     return {
-      exit: { x: target.x, y: WORLD_HEIGHT_PX + CELL_SIZE_PX / 2 },
-      entry: { x: target.x, y: -CELL_SIZE_PX / 2 },
+      exit: { x: target.x, y: layout.offsetY + layout.boardHeight + layout.wrapPadding },
+      entry: { x: target.x, y: layout.offsetY - layout.wrapPadding },
       target,
     };
   }
 
   if (from.y === 0 && to.y === GRID_HEIGHT - 1 && from.x === to.x) {
     return {
-      exit: { x: target.x, y: -CELL_SIZE_PX / 2 },
-      entry: { x: target.x, y: WORLD_HEIGHT_PX + CELL_SIZE_PX / 2 },
+      exit: { x: target.x, y: layout.offsetY - layout.wrapPadding },
+      entry: { x: target.x, y: layout.offsetY + layout.boardHeight + layout.wrapPadding },
       target,
     };
   }
