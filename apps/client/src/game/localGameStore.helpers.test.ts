@@ -9,6 +9,7 @@ import {
   estimateSnakeHeadCorrection,
   mergeControlledSnake,
   resolvePredictionLeadLimit,
+  resolveRemoteInterpolationDelayMs,
   resolvePredictionStepDelayMs,
   resolveNextTickDelayMs,
   selectStableClockOffsetMs,
@@ -460,6 +461,30 @@ describe("network helpers", () => {
         authoritativeGapMs: 90,
       }),
     ).toBe(2);
+  });
+
+  it("adds interpolation slack for remote entities when jitter grows", () => {
+    expect(
+      resolveRemoteInterpolationDelayMs({
+        tickRateMs: 100,
+        latencyMs: null,
+        jitterMs: null,
+      }),
+    ).toBe(100);
+    expect(
+      resolveRemoteInterpolationDelayMs({
+        tickRateMs: 100,
+        latencyMs: 36,
+        jitterMs: 5,
+      }),
+    ).toBe(110);
+    expect(
+      resolveRemoteInterpolationDelayMs({
+        tickRateMs: 100,
+        latencyMs: 128,
+        jitterMs: 18,
+      }),
+    ).toBe(140);
   });
 
   it("prefers the lowest-rtt recent clock sample", () => {

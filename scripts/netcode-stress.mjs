@@ -30,6 +30,8 @@ const scenarios = [
     thresholds: {
       maxIdleGapMs: 140,
       maxLateIdleGaps: 1,
+      maxDisplayGapMs: 150,
+      maxP95DisplayGapMs: 130,
       maxCorrectionDistance: 2,
     },
   },
@@ -41,6 +43,8 @@ const scenarios = [
     thresholds: {
       maxIdleGapMs: 150,
       maxLateIdleGaps: 2,
+      maxDisplayGapMs: 190,
+      maxP95DisplayGapMs: 160,
       maxCorrectionDistance: 2,
     },
   },
@@ -261,6 +265,23 @@ async function runScenarioRound(scenario, round) {
     await page1.screenshot({ path: screenshotPath, fullPage: false });
 
     const assertions = [
+      makeAssertion(
+        "display cadence stays smooth enough for the active snake",
+        page1Metrics.maxDisplayGapMs <= scenario.thresholds.maxDisplayGapMs &&
+          page2Metrics.maxDisplayGapMs <= scenario.thresholds.maxDisplayGapMs &&
+          page1Metrics.p95DisplayGapMs <= scenario.thresholds.maxP95DisplayGapMs &&
+          page2Metrics.p95DisplayGapMs <= scenario.thresholds.maxP95DisplayGapMs,
+        {
+          page1: {
+            maxDisplayGapMs: page1Metrics.maxDisplayGapMs,
+            p95DisplayGapMs: page1Metrics.p95DisplayGapMs,
+          },
+          page2: {
+            maxDisplayGapMs: page2Metrics.maxDisplayGapMs,
+            p95DisplayGapMs: page2Metrics.p95DisplayGapMs,
+          },
+        },
+      ),
       makeAssertion(
         "idle gaps stay under the expected ceiling",
         page1Metrics.maxIdleGapMs <= scenario.thresholds.maxIdleGapMs &&

@@ -138,7 +138,6 @@ const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_OFFSET_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_SAMPLE_LIMIT = 8;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 1;
-const ONLINE_PREDICTION_SPIN_THRESHOLD_MS = 12;
 const ONLINE_PREDICTION_CAP_RECHECK_MS = 18;
 const ONLINE_PREDICTION_HISTORY_LIMIT = 8;
 const ONLINE_MIN_AUTHORITATIVE_TRANSITION_RATIO = 0.72;
@@ -153,7 +152,6 @@ let roundCountdownTimeoutHandle: number | null = null;
 let browserTransportPatched = false;
 let localManualTimeControl = false;
 let localManualTimeRemainderMs = 0;
-let onlinePredictionTimeoutHandle: number | null = null;
 let onlinePredictionDueAtMs: number | null = null;
 let onlinePredictionAnimationFrameHandle: number | null = null;
 let onlinePingIntervalHandle: number | null = null;
@@ -379,11 +377,6 @@ function ensureBrowserTransportPatch(): void {
 }
 
 function stopOnlinePredictionLoop(): void {
-  if (onlinePredictionTimeoutHandle !== null) {
-    window.clearTimeout(onlinePredictionTimeoutHandle);
-    onlinePredictionTimeoutHandle = null;
-  }
-
   if (onlinePredictionAnimationFrameHandle !== null) {
     window.cancelAnimationFrame(onlinePredictionAnimationFrameHandle);
     onlinePredictionAnimationFrameHandle = null;
@@ -572,6 +565,10 @@ function computeOnlinePredictionDelayMs(
   tickRateMs: number,
   currentPredictionTick = onlinePredictionRuntime?.tick ?? onlineAuthoritativeTick,
 ): number {
+  if (currentPredictionTick > onlineAuthoritativeTick) {
+    return tickRateMs;
+  }
+
   return resolvePredictionStepDelayMs({
     tickRateMs,
     fallbackDelayMs: computeHeuristicPredictionDelayMs(tickRateMs),
@@ -673,24 +670,25 @@ function getOnlineNetworkSnapshot(
 function scheduleOnlinePredictionTimer(
   setState: StoreSetState,
   delayMs: number,
+  options: {
+    readonly anchorAtMs?: number;
+    readonly override?: boolean;
+  } = {},
 ): void {
   const normalizedDelayMs = Math.max(1, Math.round(delayMs));
-  const nextDueAtMs = performance.now() + normalizedDelayMs;
+  const nextDueAtMs = (options.anchorAtMs ?? performance.now()) + normalizedDelayMs;
+
   if (
-    onlinePredictionTimeoutHandle !== null &&
+    !options.override &&
     onlinePredictionDueAtMs !== null &&
-    onlinePredictionDueAtMs <= nextDueAtMs + 1
+    nextDueAtMs >= onlinePredictionDueAtMs - 0.5
   ) {
+    ensureOnlinePredictionAnimationFrame(setState);
     return;
   }
 
-  stopOnlinePredictionLoop();
   onlinePredictionDueAtMs = nextDueAtMs;
-
-  onlinePredictionTimeoutHandle = window.setTimeout(() => {
-    onlinePredictionTimeoutHandle = null;
-    flushOnlinePredictionWhenDue(setState);
-  }, Math.max(0, normalizedDelayMs - ONLINE_PREDICTION_SPIN_THRESHOLD_MS));
+  ensureOnlinePredictionAnimationFrame(setState);
 }
 
 function scheduleOnlinePredictionCapRecheck(
@@ -701,7 +699,19 @@ function scheduleOnlinePredictionCapRecheck(
   scheduleOnlinePredictionTimer(
     setState,
     Math.max(ONLINE_PREDICTION_CAP_RECHECK_MS, Math.round(tickRateMs * 0.18)),
+    { override: true },
   );
+}
+
+function ensureOnlinePredictionAnimationFrame(setState: StoreSetState): void {
+  if (onlinePredictionAnimationFrameHandle !== null) {
+    return;
+  }
+
+  onlinePredictionAnimationFrameHandle = window.requestAnimationFrame(() => {
+    onlinePredictionAnimationFrameHandle = null;
+    pumpOnlinePredictionLoop(setState);
+  });
 }
 
 function resetPredictedHistory(runtime: EngineRuntime): void {
@@ -808,6 +818,10 @@ function rebuildOnlinePredictionRuntime(ownSnakeId: SnakeId | null): EngineRunti
 function scheduleOnlinePredictionStep(
   setState: StoreSetState,
   stepDelayMs: number,
+  options: {
+    readonly anchorAtMs?: number;
+    readonly override?: boolean;
+  } = {},
 ): void {
   const state = storeGetState?.();
   if (!state || state.mode !== "online" || state.gameState.status !== "running") {
@@ -827,29 +841,44 @@ function scheduleOnlinePredictionStep(
   }
 
   clearPredictionLeadClamp();
-  scheduleOnlinePredictionTimer(setState, stepDelayMs);
+  scheduleOnlinePredictionTimer(setState, stepDelayMs, options);
 }
 
-function flushOnlinePredictionWhenDue(setState: StoreSetState): void {
+function pumpOnlinePredictionLoop(setState: StoreSetState): void {
+  const state = storeGetState?.();
+  if (!state || state.mode !== "online" || state.gameState.status !== "running" || !onlinePredictionRuntime) {
+    stopOnlinePredictionLoop();
+    return;
+  }
+
   if (onlinePredictionDueAtMs === null) {
-    onlinePredictionAnimationFrameHandle = null;
     return;
   }
 
   if (performance.now() + 0.5 < onlinePredictionDueAtMs) {
-    onlinePredictionAnimationFrameHandle = window.requestAnimationFrame(() => {
-      flushOnlinePredictionWhenDue(setState);
-    });
+    ensureOnlinePredictionAnimationFrame(setState);
     return;
   }
 
-  onlinePredictionDueAtMs = null;
-  onlinePredictionAnimationFrameHandle = null;
-  runOnlinePredictionStep(setState);
+  let iterations = 0;
+  while (onlinePredictionDueAtMs !== null && performance.now() + 0.5 >= onlinePredictionDueAtMs && iterations < 3) {
+    const scheduledDueAtMs = onlinePredictionDueAtMs;
+    onlinePredictionDueAtMs = null;
+    const advanced = runOnlinePredictionStep(setState, scheduledDueAtMs);
+    iterations += 1;
+    if (!advanced && onlinePredictionDueAtMs === null) {
+      break;
+    }
+  }
+
+  if (onlinePredictionDueAtMs !== null) {
+    ensureOnlinePredictionAnimationFrame(setState);
+  }
 }
 
 function runOnlinePredictionStep(
   setState: StoreSetState,
+  scheduledDueAtMs: number = performance.now(),
 ): boolean {
   const state = storeGetState?.();
   if (!state || state.mode !== "online" || state.gameState.status !== "running") {
@@ -905,6 +934,10 @@ function runOnlinePredictionStep(
     scheduleOnlinePredictionStep(
       setState,
       computeOnlinePredictionDelayMs(nextRuntime.game.config.tickRateMs, nextRuntime.tick),
+      {
+        anchorAtMs: scheduledDueAtMs,
+        override: true,
+      },
     );
   }
 
@@ -1276,6 +1309,7 @@ async function startOnlineMatchmaking(
           scheduleOnlinePredictionStep(
             setState,
             computeOnlinePredictionDelayMs(nextGame.config.tickRateMs, preservedRuntime.tick),
+            { override: true },
           );
         } else {
           stopOnlinePredictionLoop();
@@ -1371,6 +1405,7 @@ async function startOnlineMatchmaking(
         scheduleOnlinePredictionStep(
           setState,
           computeOnlinePredictionDelayMs(nextGame.config.tickRateMs, runtime.tick),
+          { override: true },
         );
       } else {
         stopOnlinePredictionLoop();
@@ -1623,15 +1658,13 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         }),
       }));
 
-      if (onlinePredictionTimeoutHandle === null) {
-        scheduleOnlinePredictionStep(
-          set,
-          computeOnlinePredictionDelayMs(
-            state.gameState.config.tickRateMs,
-            onlinePredictionRuntime?.tick ?? onlineAuthoritativeTick,
-          ),
-        );
-      }
+      scheduleOnlinePredictionStep(
+        set,
+        computeOnlinePredictionDelayMs(
+          state.gameState.config.tickRateMs,
+          onlinePredictionRuntime?.tick ?? onlineAuthoritativeTick,
+        ),
+      );
       return true;
     },
     togglePause: () => {

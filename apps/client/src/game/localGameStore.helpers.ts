@@ -241,6 +241,26 @@ export function resolvePredictionLeadLimit({
   return 2;
 }
 
+export function resolveRemoteInterpolationDelayMs({
+  tickRateMs,
+  latencyMs,
+  jitterMs,
+}: {
+  readonly tickRateMs: number;
+  readonly latencyMs: number | null;
+  readonly jitterMs: number | null;
+}): number {
+  const baseDelayMs = Math.max(1, Math.round(tickRateMs));
+  const jitterSlackMs =
+    jitterMs === null ? 0 : Math.min(baseDelayMs, Math.round(Math.max(0, jitterMs) * 2));
+  const latencySlackMs =
+    latencyMs === null
+      ? 0
+      : Math.min(Math.round(baseDelayMs * 0.3), Math.round(Math.max(0, latencyMs - baseDelayMs) * 0.15));
+
+  return Math.max(baseDelayMs, Math.min(baseDelayMs * 2, baseDelayMs + jitterSlackMs + latencySlackMs));
+}
+
 export function selectStableClockOffsetMs(
   samples: readonly ClockOffsetSample[],
 ): number | null {

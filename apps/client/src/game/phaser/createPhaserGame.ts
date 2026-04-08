@@ -23,7 +23,7 @@ export function createPhaserGame(parent: HTMLElement, canvasSize: PhaserCanvasSi
     render: {
       antialias: true,
       pixelArt: false,
-      roundPixels: true,
+      roundPixels: false,
     },
     fps: {
       target: 120,

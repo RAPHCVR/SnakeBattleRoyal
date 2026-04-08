@@ -1,6 +1,7 @@
 import type { GameState, GridPosition, SnakeState } from "@snake-duel/shared";
 import Phaser from "phaser";
 import { useLocalGameStore } from "../localGameStore.js";
+import { resolveRemoteInterpolationDelayMs } from "../localGameStore.helpers.js";
 import { FOOD_PARTICLE_TEXTURE, GRID_HEIGHT, GRID_WIDTH } from "./constants.js";
 import {
   computeArenaBoardLayout,
@@ -8,9 +9,34 @@ import {
   toBoardPosition,
   type ArenaBoardLayout,
 } from "./boardLayout.js";
-import { computeWrapTweenPlan } from "./wrapMotion.js";
+import {
+  alignWorldPosition,
+  interpolateTimedWorld,
+  resolveWrappedWorld,
+  sampleBufferedWorld,
+  type BufferedWorldSample,
+  type WorldPoint,
+} from "./segmentMotion.js";
 
 type SegmentNode = Phaser.GameObjects.Rectangle;
+
+interface TimedSegmentMotion {
+  readonly kind: "timed";
+  currentWorld: WorldPoint;
+  startWorld: WorldPoint;
+  targetWorld: WorldPoint;
+  startedAtMs: number;
+  durationMs: number;
+}
+
+interface BufferedSegmentMotion {
+  readonly kind: "buffered";
+  currentWorld: WorldPoint;
+  snapshots: BufferedWorldSample[];
+  interpolationDelayMs: number;
+}
+
+type SegmentMotion = TimedSegmentMotion | BufferedSegmentMotion;
 
 const PALETTE = {
   board: 0x0b1220,
@@ -27,6 +53,7 @@ const PALETTE = {
 export class SnakeArenaScene extends Phaser.Scene {
   private readonly segments = new Map<string, SegmentNode>();
   private readonly wrapGhosts = new Map<string, SegmentNode>();
+  private readonly segmentMotion = new Map<string, SegmentMotion>();
   private boardGraphics: Phaser.GameObjects.Graphics | null = null;
   private foodNode: Phaser.GameObjects.Arc | null = null;
   private foodPulseTween: Phaser.Tweens.Tween | null = null;
@@ -46,8 +73,9 @@ export class SnakeArenaScene extends Phaser.Scene {
     this.handleResize();
   }
 
-  public override update(): void {
+  public override update(_time: number, delta: number): void {
     this.renderFromStore(false);
+    this.advanceSegmentMotion(delta, this.time.now);
   }
 
   private handleResize(): void {
@@ -71,6 +99,7 @@ export class SnakeArenaScene extends Phaser.Scene {
       node.destroy();
     }
     this.wrapGhosts.clear();
+    this.segmentMotion.clear();
   }
 
   private renderFromStore(force: boolean): void {
@@ -90,9 +119,23 @@ export class SnakeArenaScene extends Phaser.Scene {
     const transition = storeState.transition;
     const previous = transition?.previous;
     const transitionDurationMs = Math.max(1, transition?.durationMs ?? state.config.tickRateMs);
-    const remoteTransitionDurationMs =
+    const remoteInterpolationDelayMs =
       storeState.mode === "online" ? state.config.tickRateMs : transitionDurationMs;
-    const snapPositions = force || this.snapNextRender;
+    const onlineRemoteInterpolationDelayMs =
+      storeState.mode === "online"
+        ? resolveRemoteInterpolationDelayMs({
+            tickRateMs: state.config.tickRateMs,
+            latencyMs: storeState.online.network.latencyMs,
+            jitterMs: storeState.online.network.jitterMs,
+          })
+        : remoteInterpolationDelayMs;
+    const snapPositions =
+      force ||
+      this.snapNextRender ||
+      !previous ||
+      previous.status !== state.status ||
+      state.status !== "running";
+    const nowMs = this.time.now;
 
     this.syncFood(state, previous, layout, snapPositions);
     this.syncSnakes(
@@ -101,8 +144,9 @@ export class SnakeArenaScene extends Phaser.Scene {
       layout,
       snapPositions,
       transitionDurationMs,
-      remoteTransitionDurationMs,
+      onlineRemoteInterpolationDelayMs,
       ownSnakeId,
+      nowMs,
     );
     this.snapNextRender = false;
 
@@ -195,8 +239,9 @@ export class SnakeArenaScene extends Phaser.Scene {
     layout: ArenaBoardLayout,
     snapPositions: boolean,
     transitionDurationMs: number,
-    remoteTransitionDurationMs: number,
+    remoteInterpolationDelayMs: number,
     ownSnakeId: SnakeState["id"] | null,
+    nowMs: number,
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
@@ -215,65 +260,72 @@ export class SnakeArenaScene extends Phaser.Scene {
         const visualAlive = didSnakeDieThisTick(previousSnake, snake) ? true : snake.alive;
         const node = this.ensureSegmentNode(key, snake, index, visualAlive, layout);
         const ghostKey = `${key}::wrap`;
+        const ghost = this.ensureWrapGhostNode(ghostKey, snake, index, visualAlive, layout);
+        activeGhostKeys.add(ghostKey);
         const target = toBoardPosition(layout, segment);
         const from = previousSnake?.body[index];
+        const motion = this.segmentMotion.get(key);
+        const remoteSnake = ownSnakeId !== null && snake.id !== ownSnakeId;
 
-        this.tweens.killTweensOf(node);
-        if (snapPositions || !from) {
-          node.setPosition(target.x, target.y);
-          this.clearWrapGhost(ghostKey);
+        if (snapPositions || !from || !motion) {
+          const snappedWorld = { ...target };
+          this.segmentMotion.set(
+            key,
+            remoteSnake
+              ? {
+                  kind: "buffered",
+                  currentWorld: snappedWorld,
+                  snapshots: [{ atMs: nowMs, world: snappedWorld }],
+                  interpolationDelayMs: remoteInterpolationDelayMs,
+                }
+              : {
+                  kind: "timed",
+                  currentWorld: snappedWorld,
+                  startWorld: snappedWorld,
+                  targetWorld: snappedWorld,
+                  startedAtMs: nowMs,
+                  durationMs: 0,
+                },
+          );
+          this.renderSegmentWorld(node, ghost, layout, snappedWorld);
           continue;
         }
 
-        if (areSameGridPosition(from, segment)) {
-          node.setPosition(target.x, target.y);
-          this.clearWrapGhost(ghostKey);
-          continue;
-        }
+        if (remoteSnake) {
+          const lastWorld =
+            motion.kind === "buffered"
+              ? (motion.snapshots.at(-1)?.world ?? motion.currentWorld)
+              : motion.currentWorld;
+          const alignedTarget = alignWorldPosition(layout, lastWorld, segment);
+          const previousSnapshot = motion.kind === "buffered" ? motion.snapshots.at(-1) : null;
+          const nextSnapshots =
+            previousSnapshot &&
+            areSameWorldPoint(previousSnapshot.world, alignedTarget)
+              ? motion.kind === "buffered"
+                ? motion.snapshots
+                : [{ atMs: nowMs, world: alignedTarget }]
+              : [
+                  ...(motion.kind === "buffered" ? motion.snapshots : []),
+                  { atMs: nowMs, world: alignedTarget },
+                ].slice(-4);
 
-        const wrapTweenPlan = computeWrapTweenPlan(layout, from, segment);
-        if (wrapTweenPlan) {
-          const snakeTransitionDurationMs =
-            ownSnakeId && snake.id !== ownSnakeId ? remoteTransitionDurationMs : transitionDurationMs;
-          const ghost = this.ensureWrapGhostNode(ghostKey, snake, index, visualAlive, layout);
-          activeGhostKeys.add(ghostKey);
-          this.tweens.killTweensOf(ghost);
-          node.setPosition(wrapTweenPlan.primaryStart.x, wrapTweenPlan.primaryStart.y);
-          ghost.setPosition(wrapTweenPlan.ghostStart.x, wrapTweenPlan.ghostStart.y);
-
-          this.tweens.add({
-            targets: node,
-            x: wrapTweenPlan.primaryTarget.x,
-            y: wrapTweenPlan.primaryTarget.y,
-            duration: snakeTransitionDurationMs,
-            ease: "Linear",
+          this.segmentMotion.set(key, {
+            kind: "buffered",
+            currentWorld: motion.currentWorld,
+            snapshots: nextSnapshots,
+            interpolationDelayMs: remoteInterpolationDelayMs,
           });
-          this.tweens.add({
-            targets: ghost,
-            x: wrapTweenPlan.ghostTarget.x,
-            y: wrapTweenPlan.ghostTarget.y,
-            duration: snakeTransitionDurationMs,
-            ease: "Linear",
-            onComplete: () => {
-              const activeGhost = this.wrapGhosts.get(ghostKey);
-              if (activeGhost === ghost) {
-                ghost.destroy();
-                this.wrapGhosts.delete(ghostKey);
-              }
-            },
-          });
           continue;
         }
 
-        this.clearWrapGhost(ghostKey);
-        const snakeTransitionDurationMs =
-          ownSnakeId && snake.id !== ownSnakeId ? remoteTransitionDurationMs : transitionDurationMs;
-        this.tweens.add({
-          targets: node,
-          x: target.x,
-          y: target.y,
-          duration: snakeTransitionDurationMs,
-          ease: "Linear",
+        const alignedTarget = alignWorldPosition(layout, motion.currentWorld, segment);
+        this.segmentMotion.set(key, {
+          kind: "timed",
+          currentWorld: motion.currentWorld,
+          startWorld: motion.currentWorld,
+          targetWorld: alignedTarget,
+          startedAtMs: nowMs,
+          durationMs: transitionDurationMs,
         });
       }
     }
@@ -284,14 +336,13 @@ export class SnakeArenaScene extends Phaser.Scene {
       }
       node.destroy();
       this.segments.delete(key);
+      this.segmentMotion.delete(key);
     }
 
     for (const [key, node] of this.wrapGhosts) {
       if (activeGhostKeys.has(key)) {
         continue;
       }
-
-      this.tweens.killTweensOf(node);
       node.destroy();
       this.wrapGhosts.delete(key);
     }
@@ -350,13 +401,69 @@ export class SnakeArenaScene extends Phaser.Scene {
     return node;
   }
 
+  private advanceSegmentMotion(deltaMs: number, nowMs: number): void {
+    const layout = this.layout;
+    if (!layout) {
+      return;
+    }
+
+    for (const [key, motion] of this.segmentMotion) {
+      const node = this.segments.get(key);
+      const ghost = this.wrapGhosts.get(`${key}::wrap`);
+      if (!node || !ghost) {
+        continue;
+      }
+
+      let world = motion.currentWorld;
+      if (motion.kind === "timed") {
+        world = interpolateTimedWorld(
+          motion.startWorld,
+          motion.targetWorld,
+          nowMs - motion.startedAtMs,
+          motion.durationMs,
+        );
+        motion.currentWorld = world;
+      } else {
+        const renderAtMs = nowMs - motion.interpolationDelayMs;
+        const sampledWorld = sampleBufferedWorld(motion.snapshots, renderAtMs);
+        if (sampledWorld) {
+          world = sampledWorld;
+          motion.currentWorld = world;
+        }
+
+        while (motion.snapshots.length > 2 && motion.snapshots[1] && motion.snapshots[1]!.atMs <= renderAtMs) {
+          motion.snapshots.shift();
+        }
+      }
+
+      this.renderSegmentWorld(node, ghost, layout, world);
+    }
+  }
+
+  private renderSegmentWorld(
+    node: SegmentNode,
+    ghost: SegmentNode,
+    layout: ArenaBoardLayout,
+    world: WorldPoint,
+  ): void {
+    const wrapped = resolveWrappedWorld(layout, world);
+    node.setPosition(wrapped.primary.x, wrapped.primary.y);
+
+    if (wrapped.ghost) {
+      ghost.setVisible(true);
+      ghost.setPosition(wrapped.ghost.x, wrapped.ghost.y);
+      return;
+    }
+
+    ghost.setVisible(false);
+  }
+
   private clearWrapGhost(key: string): void {
     const ghost = this.wrapGhosts.get(key);
     if (!ghost) {
       return;
     }
 
-    this.tweens.killTweensOf(ghost);
     ghost.destroy();
     this.wrapGhosts.delete(key);
   }
@@ -429,6 +536,6 @@ function didSnakeDieThisTick(previous: SnakeState | undefined, next: SnakeState)
   return Boolean(previous?.alive && !next.alive);
 }
 
-function areSameGridPosition(a: GridPosition, b: GridPosition): boolean {
+function areSameWorldPoint(a: WorldPoint, b: WorldPoint): boolean {
   return a.x === b.x && a.y === b.y;
 }
