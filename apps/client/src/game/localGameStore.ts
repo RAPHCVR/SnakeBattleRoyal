@@ -34,6 +34,14 @@ export type { TickTransition } from "./localGameStore.helpers.js";
 
 export type ClientMode = "menu" | "local" | "matchmaking" | "online";
 
+declare global {
+  interface Window {
+    __SNAKE_DUEL_CONFIG__?: {
+      colyseusUrl?: string;
+    };
+  }
+}
+
 interface RematchVotes {
   readonly player1: boolean;
   readonly player2: boolean;
@@ -90,7 +98,22 @@ const engine = new SnakeGameEngine({
   initialStatus: "waiting",
 });
 
-const COLYSEUS_URL = import.meta.env.VITE_COLYSEUS_URL ?? "ws://localhost:2567";
+function resolveColyseusUrl(): string {
+  const runtimeUrl =
+    typeof window === "undefined" ? undefined : window.__SNAKE_DUEL_CONFIG__?.colyseusUrl?.trim();
+  if (runtimeUrl) {
+    return runtimeUrl;
+  }
+
+  const buildTimeUrl = import.meta.env.VITE_COLYSEUS_URL?.trim();
+  if (buildTimeUrl) {
+    return buildTimeUrl;
+  }
+
+  return "ws://localhost:2567";
+}
+
+const COLYSEUS_URL = resolveColyseusUrl();
 const ONLINE_INPUT_BUFFER_SIZE = 3;
 const ONLINE_PING_INTERVAL_MS = 2_000;
 const ONLINE_LATENCY_EWMA_ALPHA = 0.25;

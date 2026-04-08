@@ -19,14 +19,18 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json turbo.json tsconfig.base.json ./
-COPY apps/server/package.json apps/server/package.json
-COPY packages/shared/package.json packages/shared/package.json
+COPY --chown=node:node package.json package-lock.json turbo.json tsconfig.base.json ./
+COPY --chown=node:node apps/server/package.json apps/server/package.json
+COPY --chown=node:node packages/shared/package.json packages/shared/package.json
 
-RUN npm ci --omit=dev --ignore-scripts
+RUN chown -R node:node /app
 
-COPY --from=builder /app/apps/server/dist apps/server/dist
-COPY --from=builder /app/packages/shared/dist packages/shared/dist
+USER node
+
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+COPY --from=builder --chown=node:node /app/apps/server/dist apps/server/dist
+COPY --from=builder --chown=node:node /app/packages/shared/dist packages/shared/dist
 
 EXPOSE 2567
 

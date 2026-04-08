@@ -143,6 +143,22 @@ Fichiers de déploiement:
 - `apps/client/nginx.conf`
 - `apps/server/Dockerfile`
 
+## Déploiement Kubernetes
+
+Une arborescence Kustomize prête pour la prod est disponible dans `deploy/kubernetes`:
+
+- `deploy/kubernetes/base`: services, deployments et ingress génériques
+- `deploy/kubernetes/overlays/prod`: overlay prod branché sur Cloudflare + GHCR
+
+Application:
+
+```bash
+kubectl apply -k deploy/kubernetes/overlays/prod
+```
+
+Le client lit maintenant l’URL Colyseus au runtime via `runtime-config.js`, ce qui évite de rebuild l’image frontend uniquement pour changer le hostname WebSocket.
+Pour les détails d’exploitation Kubernetes/GHCR, voir `deploy/kubernetes/README.md`.
+
 ## CI
 
 Pipelines GitHub Actions:

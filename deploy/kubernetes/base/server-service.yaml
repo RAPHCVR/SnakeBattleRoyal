@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: snake-duel-server
+  labels:
+    app.kubernetes.io/name: snake-duel-server
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: snake-duel-server
+  ports:
+    - name: http
+      port: 2567
+      targetPort: http
