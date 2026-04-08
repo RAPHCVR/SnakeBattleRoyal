@@ -85,7 +85,7 @@ export function App() {
   const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
   const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalFocusMode;
-  const floatingTouchOnline = touchMode === "online" && !touchOnlineFocusMode;
+  const floatingTouchOnline = false;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
   const showDesktopArenaHud = desktopGameMode;
@@ -99,7 +99,7 @@ export function App() {
         : floatingTouchLocal
           ? "h-[min(50svh,19rem)] min-h-[14rem] sm:h-[min(52svh,20rem)]"
           : touchMode === "online"
-            ? "h-[min(54svh,21rem)] min-h-[14rem] sm:h-[min(56svh,23rem)]"
+            ? "h-[min(47svh,18rem)] min-h-[13rem] sm:h-[min(49svh,19rem)]"
             : desktopGameMode
               ? "flex-1 min-h-0"
                 : mobileMenu

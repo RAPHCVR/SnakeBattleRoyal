@@ -678,6 +678,12 @@ async function runWebkitOnlineScenario() {
   pushAssertion("webkit online has no page errors", combinedErrors.length === 0, combinedErrors);
   pushAssertion("webkit online has no request failures", combinedFailures.length === 0, combinedFailures);
   pushAssertion("webkit online touch dock fits viewport", !snapshot.touchDock?.outOfViewport, snapshot.touchDock);
+  pushAssertion(
+    "webkit online keeps the touch dock below the arena",
+    (snapshot.touchDock?.top ?? Number.POSITIVE_INFINITY) >=
+      (snapshot.section?.bottom ?? Number.NEGATIVE_INFINITY) - 1,
+    { touchDock: snapshot.touchDock, section: snapshot.section },
+  );
   pushAssertion("webkit online has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
 
   await Promise.all([context1.close(), context2.close()]);

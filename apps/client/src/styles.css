@@ -481,6 +481,7 @@ body {
 .touch-dock--online-inline {
   display: flex;
   justify-content: center;
+  padding-bottom: calc(0.25rem + env(safe-area-inset-bottom));
 }
 
 .touch-dock__inner {
@@ -509,8 +510,52 @@ body {
 }
 
 .touch-dock__inner--online-inline {
-  width: min(100%, 20rem);
-  padding: 0.55rem;
+  width: min(100%, 17.5rem);
+  padding: 0.45rem;
+}
+
+.touch-dock__inner--online-inline .touch-dock__floating-header {
+  margin-bottom: 0.35rem;
+}
+
+.touch-dock__inner--online-inline .touch-dock__floating-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.15em;
+}
+
+.touch-dock__inner--online-inline .touch-pad {
+  gap: 0.28rem;
+  padding: 0.38rem;
+}
+
+.touch-dock__inner--online-inline .touch-pad__matrix {
+  aspect-ratio: auto;
+  min-height: min(31vw, 5.95rem);
+  gap: 0.22rem;
+}
+
+.touch-dock__inner--online-inline .touch-pad__button {
+  min-height: clamp(2.1rem, 8.8vw, 2.7rem);
+  border-radius: 0.8rem;
+}
+
+.touch-dock__inner--online-inline .touch-pad__core {
+  gap: 0.12rem;
+  border-radius: 0.8rem;
+}
+
+.touch-dock__inner--online-inline .touch-pad__core-title {
+  font-size: 0.58rem;
+}
+
+.touch-dock__inner--online-inline .touch-pad__core-copy {
+  display: none;
+}
+
+.touch-dock__inner--online-inline .touch-pill-button--compact {
+  min-height: 1.8rem;
+  padding: 0.28rem 0.62rem;
+  font-size: 0.66rem;
 }
 
 .touch-dock__inner--floating-local {
@@ -1120,8 +1165,8 @@ body {
   }
 
   .touch-dock__inner--online-inline {
-    width: min(100%, 18.5rem);
-    padding: 0.5rem;
+    width: min(100%, 16.5rem);
+    padding: 0.4rem;
   }
 
   .touch-dock__floating-header {
@@ -1186,7 +1231,7 @@ body {
   }
 
   .touch-dock__inner--online-inline {
-    width: min(100%, 18rem);
+    width: min(100%, 16rem);
   }
 
   .touch-dock--floating {

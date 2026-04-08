@@ -55,8 +55,14 @@ vi.mock("./components/PhaserViewport.js", () => ({
 }));
 
 vi.mock("./components/TouchControlsDock.js", () => ({
-  TouchControlsDock: ({ mode }: { readonly mode: string }) => (
-    <div data-testid="touch-controls-dock">dock:{mode}</div>
+  TouchControlsDock: ({
+    mode,
+    floating,
+  }: {
+    readonly mode: string;
+    readonly floating?: boolean;
+  }) => (
+    <div data-testid="touch-controls-dock">dock:{mode}:{floating ? "floating" : "inline"}</div>
   ),
   LandscapeSplitControls: () => <div data-testid="touch-controls-landscape">landscape</div>,
 }));
@@ -91,7 +97,7 @@ describe("App component states", () => {
 
     render(<App />);
 
-    expect(await screen.findByTestId("touch-controls-dock")).toHaveTextContent("dock:local");
+    expect(await screen.findByTestId("touch-controls-dock")).toHaveTextContent("dock:local:floating");
     expect(screen.getByText("Chargement du rendu Phaser...")).toBeInTheDocument();
   });
 
@@ -125,7 +131,7 @@ describe("App component states", () => {
 
     render(<App />);
 
-    expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:online");
+    expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:online:inline");
     expect(screen.getAllByText("Room en attente")).not.toHaveLength(0);
     expect(screen.getByText(/En attente d'un adversaire/i)).toBeInTheDocument();
   });
