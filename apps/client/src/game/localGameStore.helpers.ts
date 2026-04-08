@@ -245,20 +245,50 @@ export function resolveRemoteInterpolationDelayMs({
   tickRateMs,
   latencyMs,
   jitterMs,
+  authoritativeGapMs,
+  authoritativeIntervalMs,
+  authoritativeJitterMs,
 }: {
   readonly tickRateMs: number;
   readonly latencyMs: number | null;
   readonly jitterMs: number | null;
+  readonly authoritativeGapMs?: number | null;
+  readonly authoritativeIntervalMs?: number | null;
+  readonly authoritativeJitterMs?: number | null;
 }): number {
-  const baseDelayMs = Math.max(1, Math.round(tickRateMs * 1.25));
+  const baseDelayMs = Math.max(1, Math.round(tickRateMs * 1.45));
   const jitterSlackMs =
     jitterMs === null ? 0 : Math.min(tickRateMs, Math.round(Math.max(0, jitterMs) * 2));
   const latencySlackMs =
     latencyMs === null
       ? 0
-      : Math.min(Math.round(baseDelayMs * 0.3), Math.round(Math.max(0, latencyMs - baseDelayMs) * 0.15));
+      : Math.min(
+          Math.round(tickRateMs * 0.35),
+          Math.round(Math.max(0, latencyMs - Math.round(tickRateMs * 0.65)) * 0.35),
+        );
+  const authoritativeIntervalSlackMs =
+    authoritativeIntervalMs === null || authoritativeIntervalMs === undefined
+      ? 0
+      : Math.max(0, Math.round(authoritativeIntervalMs - tickRateMs));
+  const authoritativeGapSlackMs =
+    authoritativeGapMs === null || authoritativeGapMs === undefined
+      ? 0
+      : Math.max(0, Math.round(Math.max(0, authoritativeGapMs - tickRateMs) * 0.85));
+  const authoritativeJitterSlackMs =
+    authoritativeJitterMs === null || authoritativeJitterMs === undefined
+      ? 0
+      : Math.min(
+          Math.round(tickRateMs * 0.9),
+          Math.round(Math.max(0, authoritativeJitterMs) * 1.8),
+        );
+  const adaptiveSlackMs = Math.max(
+    jitterSlackMs + latencySlackMs,
+    authoritativeIntervalSlackMs + authoritativeJitterSlackMs,
+    authoritativeGapSlackMs,
+  );
+  const ceilingDelayMs = Math.max(baseDelayMs, Math.round(tickRateMs * 2.4));
 
-  return Math.max(baseDelayMs, Math.min(baseDelayMs * 2, baseDelayMs + jitterSlackMs + latencySlackMs));
+  return clampNumber(baseDelayMs + adaptiveSlackMs, baseDelayMs, ceilingDelayMs);
 }
 
 export function resolveAuthoritativeTickPerfMs({
@@ -278,30 +308,25 @@ export function resolveAuthoritativeTickPerfMs({
   readonly estimatedServerNowMs: number | null;
   readonly nowPerfMs: number;
 }): number {
-  const continuityPerfMs =
-    previousTickPerfMs !== null && tick >= previousTick
-      ? previousTickPerfMs + (tick - previousTick) * tickRateMs
-      : null;
   const clockPerfMs =
     nextTickAtMs !== null && estimatedServerNowMs !== null
       ? nowPerfMs +
         clampNumber(nextTickAtMs - estimatedServerNowMs - tickRateMs, -tickRateMs * 2, tickRateMs * 2)
       : null;
 
-  if (continuityPerfMs !== null && clockPerfMs !== null) {
-    const maxClockCorrectionMs = Math.max(
-      4,
-      Math.round(Math.max(1, tick - previousTick) * tickRateMs * 0.35),
-    );
+  if (previousTickPerfMs !== null && tick >= previousTick) {
+    const deltaTicks = Math.max(1, tick - previousTick);
+    if (clockPerfMs !== null) {
+      const rawDeltaMs = clockPerfMs - previousTickPerfMs;
+      const minDeltaMs = tickRateMs * 0.85 * deltaTicks;
+      const maxDeltaMs = tickRateMs * 1.3 * deltaTicks;
+      return previousTickPerfMs + clampNumber(rawDeltaMs, minDeltaMs, maxDeltaMs);
+    }
 
-    return continuityPerfMs + clampNumber(
-      clockPerfMs - continuityPerfMs,
-      -maxClockCorrectionMs,
-      maxClockCorrectionMs,
-    );
+    return previousTickPerfMs + deltaTicks * tickRateMs;
   }
 
-  return clockPerfMs ?? continuityPerfMs ?? nowPerfMs;
+  return clockPerfMs ?? nowPerfMs;
 }
 
 export function selectStableClockOffsetMs(

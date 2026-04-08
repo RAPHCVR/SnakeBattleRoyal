@@ -471,21 +471,31 @@ describe("network helpers", () => {
         latencyMs: null,
         jitterMs: null,
       }),
-    ).toBe(125);
+    ).toBe(145);
     expect(
       resolveRemoteInterpolationDelayMs({
         tickRateMs: 100,
         latencyMs: 36,
         jitterMs: 5,
       }),
-    ).toBe(135);
+    ).toBe(155);
     expect(
       resolveRemoteInterpolationDelayMs({
         tickRateMs: 100,
         latencyMs: 128,
         jitterMs: 18,
       }),
-    ).toBe(161);
+    ).toBe(203);
+    expect(
+      resolveRemoteInterpolationDelayMs({
+        tickRateMs: 100,
+        latencyMs: 36,
+        jitterMs: 5,
+        authoritativeGapMs: 146,
+        authoritativeIntervalMs: 128,
+        authoritativeJitterMs: 24,
+      }),
+    ).toBe(216);
   });
 
   it("keeps authoritative tick timing close to the fixed timeline while following the server clock", () => {
@@ -523,7 +533,19 @@ describe("network helpers", () => {
         estimatedServerNowMs: 5_130,
         nowPerfMs: 1_210,
       }),
-    ).toBe(1_235);
+    ).toBe(1_230);
+
+    expect(
+      resolveAuthoritativeTickPerfMs({
+        tick: 12,
+        previousTick: 0,
+        previousTickPerfMs: null,
+        tickRateMs: 100,
+        nextTickAtMs: 5_320,
+        estimatedServerNowMs: 5_130,
+        nowPerfMs: 1_210,
+      }),
+    ).toBe(1_300);
   });
 
   it("prefers the lowest-rtt recent clock sample", () => {

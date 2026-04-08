@@ -60,7 +60,11 @@ describe("segmentMotion", () => {
         ],
         1_050,
       ),
-    ).toEqual({ x: 40, y: 220 });
+    ).toEqual({
+      world: { x: 40, y: 220 },
+      mode: "interpolated",
+      underrunMs: 0,
+    });
 
     expect(
       sampleBufferedWorld(
@@ -70,7 +74,49 @@ describe("segmentMotion", () => {
         ],
         1_140,
       ),
-    ).toEqual({ x: 60, y: 220 });
+    ).toEqual({
+      world: { x: 60, y: 220 },
+      mode: "held-latest",
+      underrunMs: 40,
+    });
+  });
+
+  it("uses a short capped extrapolation before holding on the latest snapshot", () => {
+    expect(
+      sampleBufferedWorld(
+        [
+          { atMs: 1_000, world: { x: 20, y: 220 } },
+          { atMs: 1_100, world: { x: 60, y: 220 } },
+        ],
+        1_120,
+        {
+          maxExtrapolationMs: 30,
+          maxExtrapolationDistanceRatio: 0.34,
+        },
+      ),
+    ).toEqual({
+      world: { x: 68, y: 220 },
+      mode: "extrapolated",
+      underrunMs: 20,
+    });
+
+    expect(
+      sampleBufferedWorld(
+        [
+          { atMs: 1_000, world: { x: 20, y: 220 } },
+          { atMs: 1_100, world: { x: 60, y: 220 } },
+        ],
+        1_160,
+        {
+          maxExtrapolationMs: 30,
+          maxExtrapolationDistanceRatio: 0.34,
+        },
+      ),
+    ).toEqual({
+      world: { x: 60, y: 220 },
+      mode: "held-latest",
+      underrunMs: 60,
+    });
   });
 
   it("returns a ghost render when the segment moves outside the board", () => {

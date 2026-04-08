@@ -11,6 +11,18 @@ export interface BufferedWorldSample {
   readonly world: WorldPoint;
 }
 
+export type BufferedWorldSampleMode =
+  | "clamped-start"
+  | "interpolated"
+  | "extrapolated"
+  | "held-latest";
+
+export interface BufferedWorldResult {
+  readonly world: WorldPoint;
+  readonly mode: BufferedWorldSampleMode;
+  readonly underrunMs: number;
+}
+
 export interface WrapRenderState {
   readonly primary: WorldPoint;
   readonly ghost: WorldPoint | null;
@@ -48,13 +60,21 @@ export function interpolateTimedWorld(
 export function sampleBufferedWorld(
   snapshots: readonly BufferedWorldSample[],
   renderAtMs: number,
-): WorldPoint | null {
+  options: {
+    readonly maxExtrapolationMs?: number;
+    readonly maxExtrapolationDistanceRatio?: number;
+  } = {},
+): BufferedWorldResult | null {
   if (snapshots.length === 0) {
     return null;
   }
 
   if (snapshots.length === 1 || renderAtMs <= snapshots[0]!.atMs) {
-    return { ...snapshots[0]!.world };
+    return {
+      world: { ...snapshots[0]!.world },
+      mode: "clamped-start",
+      underrunMs: 0,
+    };
   }
 
   for (let index = 1; index < snapshots.length; index += 1) {
@@ -68,13 +88,52 @@ export function sampleBufferedWorld(
       const spanMs = Math.max(1, next.atMs - previous.atMs);
       const progress = clamp((renderAtMs - previous.atMs) / spanMs, 0, 1);
       return {
-        x: linear(previous.world.x, next.world.x, progress),
-        y: linear(previous.world.y, next.world.y, progress),
+        world: {
+          x: linear(previous.world.x, next.world.x, progress),
+          y: linear(previous.world.y, next.world.y, progress),
+        },
+        mode: "interpolated",
+        underrunMs: 0,
       };
     }
   }
 
-  return { ...snapshots[snapshots.length - 1]!.world };
+  const latest = snapshots[snapshots.length - 1]!;
+  const underrunMs = Math.max(0, renderAtMs - latest.atMs);
+  const maxExtrapolationMs = Math.max(0, Math.round(options.maxExtrapolationMs ?? 0));
+  const maxExtrapolationDistanceRatio = clamp(
+    options.maxExtrapolationDistanceRatio ?? 0.34,
+    0,
+    1,
+  );
+  const previous = snapshots.length > 1 ? snapshots[snapshots.length - 2]! : null;
+
+  if (previous && underrunMs > 0 && maxExtrapolationMs > 0) {
+    if (underrunMs <= maxExtrapolationMs) {
+      const spanMs = Math.max(1, latest.atMs - previous.atMs);
+      const extrapolationRatio = Math.min(
+        underrunMs / spanMs,
+        maxExtrapolationDistanceRatio,
+      );
+
+      if (extrapolationRatio > 0) {
+        return {
+          world: {
+            x: latest.world.x + (latest.world.x - previous.world.x) * extrapolationRatio,
+            y: latest.world.y + (latest.world.y - previous.world.y) * extrapolationRatio,
+          },
+          mode: "extrapolated",
+          underrunMs,
+        };
+      }
+    }
+  }
+
+  return {
+    world: { ...latest.world },
+    mode: "held-latest",
+    underrunMs,
+  };
 }
 
 export function resolveWrappedWorld(layout: ArenaBoardLayout, world: WorldPoint): WrapRenderState {

@@ -1,7 +1,15 @@
 import type { GameState, GridPosition, SnakeState } from "@snake-duel/shared";
 import Phaser from "phaser";
-import { useLocalGameStore } from "../localGameStore.js";
-import { resolveRemoteInterpolationDelayMs } from "../localGameStore.helpers.js";
+import {
+  getOnlineAuthoritativeState,
+  getOnlineRenderTimingSnapshot,
+  type RemoteRenderDebugSnapshot,
+  useLocalGameStore,
+} from "../localGameStore.js";
+import {
+  mergeControlledSnake,
+  resolveRemoteInterpolationDelayMs,
+} from "../localGameStore.helpers.js";
 import { FOOD_PARTICLE_TEXTURE, GRID_HEIGHT, GRID_WIDTH } from "./constants.js";
 import {
   computeArenaBoardLayout,
@@ -14,6 +22,7 @@ import {
   interpolateTimedWorld,
   resolveWrappedWorld,
   sampleBufferedWorld,
+  type BufferedWorldResult,
   type BufferedWorldSample,
   type WorldPoint,
 } from "./segmentMotion.js";
@@ -38,6 +47,15 @@ interface BufferedSegmentMotion {
 
 type SegmentMotion = TimedSegmentMotion | BufferedSegmentMotion;
 
+type SnakeArenaGlobal = typeof globalThis & {
+  __SNAKE_DUEL_RENDER_DEBUG__?: RemoteRenderDebugSnapshot;
+};
+
+const REMOTE_SNAPSHOT_LIMIT = 6;
+const REMOTE_DELAY_RISE_ALPHA = 0.45;
+const REMOTE_DELAY_FALL_ALPHA = 0.12;
+const REMOTE_MAX_EXTRAPOLATION_DISTANCE_RATIO = 0.34;
+
 const PALETTE = {
   board: 0x0b1220,
   boardBorder: 0x1f2937,
@@ -50,15 +68,51 @@ const PALETTE = {
   food: 0xf59e0b,
 } as const;
 
+function createRemoteRenderDebugSnapshot(): RemoteRenderDebugSnapshot {
+  return {
+    headFrames: 0,
+    headInterpolatedFrames: 0,
+    headExtrapolatedFrames: 0,
+    headHeldFrames: 0,
+    headSevereHeldFrames: 0,
+    maxHeadUnderrunMs: 0,
+    interpolationDelayMs: 0,
+    headSnapshotCount: 0,
+    headLatestSnapshotAgeMs: null,
+  };
+}
+
+function writeRemoteRenderDebugSnapshot(snapshot: RemoteRenderDebugSnapshot | null): void {
+  const globalObject = globalThis as SnakeArenaGlobal;
+
+  if (snapshot === null) {
+    delete globalObject.__SNAKE_DUEL_RENDER_DEBUG__;
+    return;
+  }
+
+  globalObject.__SNAKE_DUEL_RENDER_DEBUG__ = snapshot;
+}
+
+function easeRemoteInterpolationDelayMs(currentDelayMs: number, targetDelayMs: number): number {
+  if (!Number.isFinite(currentDelayMs) || currentDelayMs <= 0) {
+    return targetDelayMs;
+  }
+
+  const alpha = targetDelayMs >= currentDelayMs ? REMOTE_DELAY_RISE_ALPHA : REMOTE_DELAY_FALL_ALPHA;
+  return currentDelayMs + (targetDelayMs - currentDelayMs) * alpha;
+}
+
 export class SnakeArenaScene extends Phaser.Scene {
   private readonly segments = new Map<string, SegmentNode>();
   private readonly wrapGhosts = new Map<string, SegmentNode>();
   private readonly segmentMotion = new Map<string, SegmentMotion>();
+  private remoteRenderDebug = createRemoteRenderDebugSnapshot();
   private boardGraphics: Phaser.GameObjects.Graphics | null = null;
   private foodNode: Phaser.GameObjects.Arc | null = null;
   private foodPulseTween: Phaser.Tweens.Tween | null = null;
   private layout: ArenaBoardLayout | null = null;
   private renderVersion = -1;
+  private authoritativeRenderTick = -1;
   private snapNextRender = false;
 
   public constructor() {
@@ -67,6 +121,8 @@ export class SnakeArenaScene extends Phaser.Scene {
 
   public create(): void {
     this.boardGraphics = this.add.graphics().setDepth(0);
+    this.remoteRenderDebug = createRemoteRenderDebugSnapshot();
+    writeRemoteRenderDebugSnapshot(this.remoteRenderDebug);
     this.ensureParticleTexture();
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
@@ -94,6 +150,10 @@ export class SnakeArenaScene extends Phaser.Scene {
     this.foodPulseTween = null;
     this.boardGraphics = null;
     this.layout = null;
+    this.renderVersion = -1;
+    this.authoritativeRenderTick = -1;
+    this.remoteRenderDebug = createRemoteRenderDebugSnapshot();
+    writeRemoteRenderDebugSnapshot(null);
 
     for (const node of this.wrapGhosts.values()) {
       node.destroy();
@@ -109,13 +169,23 @@ export class SnakeArenaScene extends Phaser.Scene {
     }
 
     const storeState = useLocalGameStore.getState();
-    if (!force && storeState.renderVersion === this.renderVersion) {
+    const ownSnakeId = storeState.mode === "online" ? storeState.online.ownSnakeId : null;
+    const authoritativeState =
+      storeState.mode === "online" ? getOnlineAuthoritativeState() : null;
+    const authoritativeTickChanged =
+      storeState.mode === "online" && storeState.online.authoritativeTick !== this.authoritativeRenderTick;
+
+    if (!force && !authoritativeTickChanged && storeState.renderVersion === this.renderVersion) {
       return;
     }
 
     this.renderVersion = storeState.renderVersion;
-    const state = storeState.gameState;
-    const ownSnakeId = storeState.mode === "online" ? storeState.online.ownSnakeId : null;
+    this.authoritativeRenderTick =
+      storeState.mode === "online" ? storeState.online.authoritativeTick : -1;
+    const state =
+      storeState.mode === "online" && authoritativeState
+        ? mergeControlledSnake(authoritativeState, storeState.gameState, ownSnakeId)
+        : storeState.gameState;
     const transition = storeState.transition;
     const previous = transition?.previous;
     const transitionDurationMs = Math.max(1, transition?.durationMs ?? state.config.tickRateMs);
@@ -123,11 +193,7 @@ export class SnakeArenaScene extends Phaser.Scene {
       storeState.mode === "online" ? state.config.tickRateMs : transitionDurationMs;
     const onlineRemoteInterpolationDelayMs =
       storeState.mode === "online"
-        ? resolveRemoteInterpolationDelayMs({
-            tickRateMs: state.config.tickRateMs,
-            latencyMs: storeState.online.network.latencyMs,
-            jitterMs: storeState.online.network.jitterMs,
-          })
+        ? this.resolveRemoteBufferDelayMs(state.config.tickRateMs)
         : remoteInterpolationDelayMs;
     const nowMs = performance.now();
     const remoteSnapshotAtMs =
@@ -319,9 +385,11 @@ export class SnakeArenaScene extends Phaser.Scene {
                     atMs: snapshotAtMs,
                     world: alignedTarget,
                   };
-                  return bufferedSnapshots.slice(-4);
+                  return bufferedSnapshots.slice(-REMOTE_SNAPSHOT_LIMIT);
                 })()
-              : [...bufferedSnapshots, { atMs: snapshotAtMs, world: alignedTarget }].slice(-4);
+              : [...bufferedSnapshots, { atMs: snapshotAtMs, world: alignedTarget }].slice(
+                  -REMOTE_SNAPSHOT_LIMIT,
+                );
 
           this.segmentMotion.set(key, {
             kind: "buffered",
@@ -421,6 +489,12 @@ export class SnakeArenaScene extends Phaser.Scene {
       return;
     }
 
+    const storeState = useLocalGameStore.getState();
+    const targetRemoteInterpolationDelayMs =
+      storeState.mode === "online"
+        ? this.resolveRemoteBufferDelayMs(storeState.gameState.config.tickRateMs)
+        : null;
+
     for (const [key, motion] of this.segmentMotion) {
       const node = this.segments.get(key);
       const ghost = this.wrapGhosts.get(`${key}::wrap`);
@@ -438,20 +512,89 @@ export class SnakeArenaScene extends Phaser.Scene {
         );
         motion.currentWorld = world;
       } else {
-        const renderAtMs = nowMs - motion.interpolationDelayMs;
-        const sampledWorld = sampleBufferedWorld(motion.snapshots, renderAtMs);
-        if (sampledWorld) {
-          world = sampledWorld;
-          motion.currentWorld = world;
+        if (targetRemoteInterpolationDelayMs !== null) {
+          motion.interpolationDelayMs = easeRemoteInterpolationDelayMs(
+            motion.interpolationDelayMs,
+            targetRemoteInterpolationDelayMs,
+          );
         }
 
-        while (motion.snapshots.length > 2 && motion.snapshots[1] && motion.snapshots[1]!.atMs <= renderAtMs) {
+        const renderAtMs = nowMs - motion.interpolationDelayMs;
+        const sampledWorld = sampleBufferedWorld(motion.snapshots, renderAtMs, {
+          maxExtrapolationMs: Math.min(
+            42,
+            Math.max(16, Math.round(motion.interpolationDelayMs * 0.22)),
+          ),
+          maxExtrapolationDistanceRatio: REMOTE_MAX_EXTRAPOLATION_DISTANCE_RATIO,
+        });
+        if (sampledWorld) {
+          world = sampledWorld.world;
+          motion.currentWorld = world;
+          if (key.endsWith("-0")) {
+            this.recordRemoteHeadRenderSample(
+              sampledWorld,
+              motion.interpolationDelayMs,
+              motion.snapshots,
+              nowMs,
+            );
+          }
+        }
+
+        while (
+          motion.snapshots.length > 2 &&
+          motion.snapshots[1] &&
+          motion.snapshots[1]!.atMs <= renderAtMs
+        ) {
           motion.snapshots.shift();
         }
       }
 
       this.renderSegmentWorld(node, ghost, layout, world);
     }
+  }
+
+  private resolveRemoteBufferDelayMs(tickRateMs: number): number {
+    const renderTiming = getOnlineRenderTimingSnapshot();
+    return resolveRemoteInterpolationDelayMs({
+      tickRateMs,
+      latencyMs: renderTiming.latencyMs,
+      jitterMs: renderTiming.jitterMs,
+      authoritativeGapMs: renderTiming.authoritativeGapMs,
+      authoritativeIntervalMs: renderTiming.authoritativeIntervalMs,
+      authoritativeJitterMs: renderTiming.authoritativeJitterMs,
+    });
+  }
+
+  private recordRemoteHeadRenderSample(
+    sampledWorld: BufferedWorldResult,
+    interpolationDelayMs: number,
+    snapshots: readonly BufferedWorldSample[],
+    nowMs: number,
+  ): void {
+    const latestSnapshot = snapshots.at(-1) ?? null;
+    this.remoteRenderDebug = {
+      headFrames: this.remoteRenderDebug.headFrames + 1,
+      headInterpolatedFrames:
+        this.remoteRenderDebug.headInterpolatedFrames +
+        (sampledWorld.mode === "interpolated" ? 1 : 0),
+      headExtrapolatedFrames:
+        this.remoteRenderDebug.headExtrapolatedFrames +
+        (sampledWorld.mode === "extrapolated" ? 1 : 0),
+      headHeldFrames:
+        this.remoteRenderDebug.headHeldFrames + (sampledWorld.mode === "held-latest" ? 1 : 0),
+      headSevereHeldFrames:
+        this.remoteRenderDebug.headSevereHeldFrames +
+        (sampledWorld.mode === "held-latest" && sampledWorld.underrunMs >= 45 ? 1 : 0),
+      maxHeadUnderrunMs: Math.max(
+        this.remoteRenderDebug.maxHeadUnderrunMs,
+        Math.round(sampledWorld.underrunMs),
+      ),
+      interpolationDelayMs: Math.round(interpolationDelayMs),
+      headSnapshotCount: snapshots.length,
+      headLatestSnapshotAgeMs:
+        latestSnapshot === null ? null : Math.max(0, Math.round(nowMs - latestSnapshot.atMs)),
+    };
+    writeRemoteRenderDebugSnapshot(this.remoteRenderDebug);
   }
 
   private renderSegmentWorld(

@@ -44,11 +44,32 @@ export type { TickTransition } from "./localGameStore.helpers.js";
 
 export type ClientMode = "menu" | "local" | "matchmaking" | "online";
 
+export interface OnlineRenderTimingSnapshot {
+  readonly latencyMs: number | null;
+  readonly jitterMs: number | null;
+  readonly authoritativeGapMs: number | null;
+  readonly authoritativeIntervalMs: number | null;
+  readonly authoritativeJitterMs: number | null;
+}
+
+export interface RemoteRenderDebugSnapshot {
+  readonly headFrames: number;
+  readonly headInterpolatedFrames: number;
+  readonly headExtrapolatedFrames: number;
+  readonly headHeldFrames: number;
+  readonly headSevereHeldFrames: number;
+  readonly maxHeadUnderrunMs: number;
+  readonly interpolationDelayMs: number;
+  readonly headSnapshotCount: number;
+  readonly headLatestSnapshotAgeMs: number | null;
+}
+
 declare global {
   interface Window {
     __SNAKE_DUEL_CONFIG__?: {
       colyseusUrl?: string;
     };
+    __SNAKE_DUEL_RENDER_DEBUG__?: RemoteRenderDebugSnapshot;
   }
 }
 
@@ -138,6 +159,8 @@ const ONLINE_PING_INTERVAL_MS = 1_000;
 const ONLINE_LATENCY_EWMA_ALPHA = 0.25;
 const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_OFFSET_EWMA_ALPHA = 0.2;
+const ONLINE_AUTHORITATIVE_INTERVAL_EWMA_ALPHA = 0.25;
+const ONLINE_AUTHORITATIVE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_CLOCK_SAMPLE_LIMIT = 8;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 1;
 const ONLINE_PREDICTION_CAP_RECHECK_MS = 18;
@@ -177,6 +200,8 @@ let onlineClockSamples: ClockOffsetSample[] = [];
 let onlineCorrectionCount = 0;
 let onlineLastCorrectionDistance = 0;
 let onlineLastAuthoritativeReceivedPerfMs: number | null = null;
+let onlineAuthoritativeIntervalMs: number | null = null;
+let onlineAuthoritativeJitterMs: number | null = null;
 let onlineMaxAuthoritativeGapMs = 0;
 let onlineLateAuthoritativeUpdateCount = 0;
 let onlinePredictionLeadClampCount = 0;
@@ -420,6 +445,8 @@ function resetOnlineRuntimeState(): void {
   onlineCorrectionCount = 0;
   onlineLastCorrectionDistance = 0;
   onlineLastAuthoritativeReceivedPerfMs = null;
+  onlineAuthoritativeIntervalMs = null;
+  onlineAuthoritativeJitterMs = null;
   onlineMaxAuthoritativeGapMs = 0;
   onlineLateAuthoritativeUpdateCount = 0;
   onlinePredictionLeadClampCount = 0;
@@ -542,6 +569,50 @@ function getCurrentAuthoritativeGapMs(): number | null {
   }
 
   return Math.max(0, performance.now() - onlineLastAuthoritativeReceivedPerfMs);
+}
+
+function noteAuthoritativeGapSample(gapMs: number): void {
+  const normalizedGapMs = Math.max(0, gapMs);
+  const previousIntervalMs = onlineAuthoritativeIntervalMs;
+
+  if (previousIntervalMs === null) {
+    onlineAuthoritativeIntervalMs = normalizedGapMs;
+    onlineAuthoritativeJitterMs = 0;
+    return;
+  }
+
+  const deviationMs = Math.abs(normalizedGapMs - previousIntervalMs);
+  onlineAuthoritativeIntervalMs =
+    previousIntervalMs +
+    (normalizedGapMs - previousIntervalMs) * ONLINE_AUTHORITATIVE_INTERVAL_EWMA_ALPHA;
+
+  if (onlineAuthoritativeJitterMs === null) {
+    onlineAuthoritativeJitterMs = deviationMs;
+    return;
+  }
+
+  onlineAuthoritativeJitterMs =
+    onlineAuthoritativeJitterMs +
+    (deviationMs - onlineAuthoritativeJitterMs) * ONLINE_AUTHORITATIVE_JITTER_EWMA_ALPHA;
+}
+
+export function getOnlineRenderTimingSnapshot(): OnlineRenderTimingSnapshot {
+  return {
+    latencyMs: onlineLatencyMs === null ? null : Math.round(onlineLatencyMs),
+    jitterMs: onlineJitterMs === null ? null : Math.round(onlineJitterMs),
+    authoritativeGapMs: (() => {
+      const gapMs = getCurrentAuthoritativeGapMs();
+      return gapMs === null ? null : Math.round(gapMs);
+    })(),
+    authoritativeIntervalMs:
+      onlineAuthoritativeIntervalMs === null ? null : Math.round(onlineAuthoritativeIntervalMs),
+    authoritativeJitterMs:
+      onlineAuthoritativeJitterMs === null ? null : Math.round(onlineAuthoritativeJitterMs),
+  };
+}
+
+export function getOnlineAuthoritativeState(): GameState | null {
+  return onlineAuthoritativeState;
 }
 
 function getEstimatedOneWayDelayMs(tickRateMs: number): number {
@@ -1220,6 +1291,7 @@ async function startOnlineMatchmaking(
       const previousAuthoritativePerfMs = onlineLastAuthoritativeReceivedPerfMs;
       if (previousAuthoritativePerfMs !== null && tick > onlineAuthoritativeTick) {
         const authoritativeGapMs = Math.max(0, authoritativeReceivedPerfMs - previousAuthoritativePerfMs);
+        noteAuthoritativeGapSample(authoritativeGapMs);
         onlineMaxAuthoritativeGapMs = Math.max(onlineMaxAuthoritativeGapMs, authoritativeGapMs);
         if (
           nextGame.status === "running" &&
@@ -1231,10 +1303,12 @@ async function startOnlineMatchmaking(
       onlineLastAuthoritativeReceivedPerfMs = authoritativeReceivedPerfMs;
       clearPredictionLeadClamp();
 
+      const preserveAuthoritativeTimeline =
+        currentStore.online.roomStatus === "running" && nextGame.status === "running";
       const authoritativeTickPerfMs = resolveAuthoritativeTickPerfMs({
         tick,
-        previousTick: onlineAuthoritativeTick,
-        previousTickPerfMs: onlineAuthoritativeTickPerfMs,
+        previousTick: preserveAuthoritativeTimeline ? onlineAuthoritativeTick : 0,
+        previousTickPerfMs: preserveAuthoritativeTimeline ? onlineAuthoritativeTickPerfMs : null,
         tickRateMs: nextGame.config.tickRateMs,
         nextTickAtMs,
         estimatedServerNowMs,
@@ -1723,6 +1797,7 @@ type AnyRecord = Record<string, unknown>;
 
 function renderGameToText(): string {
   const state = useLocalGameStore.getState();
+  const renderTiming = getOnlineRenderTimingSnapshot();
   const payload = {
     mode: state.mode,
     coordinateSystem: {
@@ -1766,7 +1841,9 @@ function renderGameToText(): string {
       onlineNetcode:
         state.mode === "online"
           ? {
-              authoritativeGapMs: getCurrentAuthoritativeGapMs(),
+              authoritativeGapMs: renderTiming.authoritativeGapMs,
+              authoritativeIntervalMs: renderTiming.authoritativeIntervalMs,
+              authoritativeJitterMs: renderTiming.authoritativeJitterMs,
               maxAuthoritativeGapMs: onlineMaxAuthoritativeGapMs,
               lateAuthoritativeUpdateCount: onlineLateAuthoritativeUpdateCount,
               leadLimit: getPredictionLeadLimit(state.gameState.config.tickRateMs),
@@ -1775,6 +1852,8 @@ function renderGameToText(): string {
               maxClampMs: onlineMaxPredictionClampMs,
             }
           : null,
+      remoteRender:
+        typeof window === "undefined" ? null : (window.__SNAKE_DUEL_RENDER_DEBUG__ ?? null),
     },
     session: state.session,
   };
