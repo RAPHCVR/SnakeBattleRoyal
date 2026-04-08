@@ -74,4 +74,21 @@ describe("TouchControlsDock", () => {
 
     expect(mocks.enqueueOnlineInput).toHaveBeenCalledWith("up");
   });
+
+  it("keeps fullscreen and quit actions visible in compact online mode", () => {
+    render(
+      <TouchControlsDock
+        mode="online"
+        floating
+        fullscreenSupported
+        fullscreenActive
+        onToggleFullscreen={vi.fn()}
+        secondaryActionLabel="Quitter"
+        onSecondaryAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Quitter plein ecran" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Quitter" })).toBeInTheDocument();
+  });
 });

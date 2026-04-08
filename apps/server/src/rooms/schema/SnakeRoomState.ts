@@ -19,6 +19,11 @@ export interface RoomRuntimeState {
   readonly rngSeed: number;
 }
 
+export interface RoomCountdownState {
+  readonly endsAtMs: number | null;
+  readonly durationMs: number;
+}
+
 export class GridPositionSchema extends Schema {
   @type("number") public x = 0;
   @type("number") public y = 0;
@@ -61,6 +66,8 @@ export class SnakeRoomState extends Schema {
   @type("number") public roundNumber = 0;
   @type("number") public player1Wins = 0;
   @type("number") public player2Wins = 0;
+  @type("number") public countdownEndsAtMs = 0;
+  @type("number") public countdownDurationMs = 0;
 }
 
 export function applyGameStateToSchema(
@@ -72,6 +79,10 @@ export function applyGameStateToSchema(
   runtime: RoomRuntimeState = {
     processedInputSequences: createEmptyProcessedInputSequences(),
     rngSeed: 1,
+  },
+  countdown: RoomCountdownState = {
+    endsAtMs: null,
+    durationMs: 0,
   },
 ): void {
   state.status = game.status;
@@ -87,6 +98,7 @@ export function applyGameStateToSchema(
   syncTickEvent(state, tickEvent);
   syncRuntimeState(state, runtime);
   syncSession(state, session);
+  syncCountdown(state, countdown);
 }
 
 function syncSnakeArray(target: ArraySchema<SnakeSchema>, next: readonly SnakeState[]): void {
@@ -186,6 +198,11 @@ function syncSession(state: SnakeRoomState, session: RoundSessionState): void {
   state.roundNumber = session.roundNumber;
   state.player1Wins = session.player1Wins;
   state.player2Wins = session.player2Wins;
+}
+
+function syncCountdown(state: SnakeRoomState, countdown: RoomCountdownState): void {
+  state.countdownEndsAtMs = countdown.endsAtMs ?? 0;
+  state.countdownDurationMs = countdown.durationMs > 0 ? countdown.durationMs : 0;
 }
 
 function createSnakeSchema(): SnakeSchema {

@@ -12,6 +12,7 @@ import {
 import {
   SnakeRoomState,
   applyGameStateToSchema,
+  type RoomCountdownState,
   type RoundSessionState,
 } from "./schema/SnakeRoomState.js";
 
@@ -39,6 +40,7 @@ interface PongMessage {
 
 const PLAYER_IDS: readonly SnakeId[] = ["player1", "player2"];
 const EMPTY_ROOM_TIMEOUT_MS = 10_000;
+const ROUND_START_COUNTDOWN_MS = 3_000;
 
 export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   public override maxClients = 2;
@@ -55,8 +57,10 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
   private readonly occupiedSlots = new Set<SnakeId>();
   private readonly rematchVotes = new Set<SnakeId>();
   private session: RoundSessionState = createRoundSessionState();
+  private countdown: RoomCountdownState = createCountdownState();
   private roundResultRecorded = false;
   private emptyRoomTimeout: ReturnType<typeof setTimeout> | null = null;
+  private roundCountdownTimeout: ReturnType<typeof setTimeout> | null = null;
 
   public override onCreate(): void {
     this.patchRate = DEFAULT_GAME_CONFIG.tickRateMs;
@@ -136,8 +140,8 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       this.rematchVotes.add(slot);
       this.syncRematchVotes();
 
-      if (this.rematchVotes.size === 2) {
-        this.startRunningMatch();
+      if (this.rematchVotes.size === this.maxClients) {
+        this.startRoundCountdown();
       }
     });
   }
@@ -155,7 +159,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
     });
 
     if (this.clients.length === this.maxClients && this.engine.getState().status === "waiting") {
-      this.startRunningMatch();
+      this.startRoundCountdown();
       return;
     }
 
@@ -170,6 +174,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       this.rematchVotes.delete(slot);
     }
 
+    this.clearRoundCountdown();
     this.state.connectedPlayers = this.clients.length;
     this.syncRematchVotes();
 
@@ -192,9 +197,11 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
 
   public override onDispose(): void {
     this.clearEmptyRoomTimeout();
+    this.clearRoundCountdown();
   }
 
-  private startRunningMatch(): void {
+  private startRoundCountdown(): void {
+    this.clearRoundCountdown();
     this.rematchVotes.clear();
     this.syncRematchVotes();
     this.roundResultRecorded = false;
@@ -202,12 +209,34 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
       ...this.session,
       roundNumber: this.session.roundNumber > 0 ? this.session.roundNumber + 1 : 1,
     };
-    this.engine.reset("running");
+    this.countdown = createCountdownState(ROUND_START_COUNTDOWN_MS);
+    this.engine.reset("waiting");
     this.pushEngineState();
     this.broadcast("system", {
-      type: "match_started",
-      tickRateMs: DEFAULT_GAME_CONFIG.tickRateMs,
+      type: "match_countdown",
+      countdownDurationMs: this.countdown.durationMs,
+      countdownEndsAtMs: this.countdown.endsAtMs,
     });
+
+    this.roundCountdownTimeout = setTimeout(() => {
+      this.roundCountdownTimeout = null;
+      this.countdown = createCountdownState();
+      this.engine.setStatus("running");
+      this.pushEngineState();
+      this.broadcast("system", {
+        type: "match_started",
+        tickRateMs: DEFAULT_GAME_CONFIG.tickRateMs,
+      });
+    }, ROUND_START_COUNTDOWN_MS);
+  }
+
+  private clearRoundCountdown(): void {
+    if (this.roundCountdownTimeout) {
+      clearTimeout(this.roundCountdownTimeout);
+      this.roundCountdownTimeout = null;
+    }
+
+    this.countdown = createCountdownState();
   }
 
   private pushEngineState(tickEvent: TickEvent | null = null): void {
@@ -222,6 +251,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
         processedInputSequences: runtime.processedInputSequences,
         rngSeed: runtime.rngSeed,
       },
+      this.countdown,
     );
     this.state.connectedPlayers = this.clients.length;
     this.syncRematchVotes();
@@ -259,6 +289,7 @@ export class SnakeRoom extends Room<{ state: SnakeRoomState }> {
     if (!this.emptyRoomTimeout) {
       return;
     }
+
     clearTimeout(this.emptyRoomTimeout);
     this.emptyRoomTimeout = null;
   }
@@ -294,6 +325,13 @@ function createRoundSessionState(): RoundSessionState {
     roundNumber: 0,
     player1Wins: 0,
     player2Wins: 0,
+  };
+}
+
+function createCountdownState(durationMs = 0): RoomCountdownState {
+  return {
+    endsAtMs: durationMs > 0 ? Date.now() + durationMs : null,
+    durationMs: durationMs > 0 ? durationMs : 0,
   };
 }
 

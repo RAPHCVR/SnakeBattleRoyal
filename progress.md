@@ -62,3 +62,30 @@ Original prompt: Utilise les subagents si pertinent, fais un tour complet et nic
   - `npm test`: OK
   - `npm run qa:smoke`: OK (36 assertions)
   - `npm run build`: OK
+
+2026-04-08, UX polish countdown/fullscreen:
+- Refonte de la chrome de partie:
+  - suppression de la telemetrie brute `Ping/Jitter/Sync` cote joueur au profit d'un seul signal degradé (`Connexion fragile`, `Resynchronisation`, `File d'inputs chargee`) quand necessaire;
+  - header desktop de partie remplace par une topbar compacte et stable pour eviter les reflows et les animations parasites;
+  - transitions overlay/docks ramenées a des fades simples, sans glissement vertical.
+- Countdown de manche:
+  - ajout d'un vrai pre-start countdown de 3 secondes cote local et cote room Colyseus;
+  - schema room enrichi avec `countdownEndsAtMs` et `countdownDurationMs`;
+  - overlay de compte a rebours visible avant le depart des manches locales et online.
+- Fullscreen et densite de layout:
+  - action fullscreen exposee sur desktop pendant la partie, en pause et pendant l'attente/countdown;
+  - dock tactile conserve maintenant les actions fullscreen/quitter avant le debut de manche;
+  - rangée d'actions tactile online compacte sur une seule ligne, y compris sur petits telephones;
+  - taille de l'aire de jeu revue pour agrandir le plateau en desktop fullscreen et en focus mobile.
+- QA / regression:
+  - tests composants React ajustes pour le countdown, le nettoyage de la telemetrie visible et les actions fullscreen compactes;
+  - smoke Playwright adapte au countdown reel et execute apres installation locale des navigateurs;
+  - verification visuelle iterative sur `mobile-menu-iphone-se.png` et `mobile-online-iphone-14pm.png`, avec correction du debordement menu mobile et retour du contexte de siege online tactile.
+- Validation finale:
+  - `npm run typecheck --workspace @snake-duel/client`: OK
+  - `npm run typecheck --workspace @snake-duel/server`: OK
+  - `npm run test --workspace @snake-duel/client`: OK
+  - `npm run test --workspace @snake-duel/server`: OK
+  - `npm run build --workspace @snake-duel/client`: OK
+  - `npm run build --workspace @snake-duel/server`: OK
+  - `npm run qa:smoke`: OK (37 assertions)

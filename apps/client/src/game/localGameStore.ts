@@ -75,6 +75,13 @@ interface OnlineSessionState {
   readonly network: OnlineNetworkState;
 }
 
+interface MatchCountdownState {
+  readonly active: boolean;
+  readonly endsAtMs: number | null;
+  readonly durationMs: number;
+  readonly source: "none" | "local" | "online";
+}
+
 interface LocalGameStoreState {
   readonly mode: ClientMode;
   readonly gameState: GameState;
@@ -82,6 +89,7 @@ interface LocalGameStoreState {
   readonly renderVersion: number;
   readonly session: SessionSummary;
   readonly online: OnlineSessionState;
+  readonly countdown: MatchCountdownState;
   startLocalGame: () => void;
   restartLocalGame: () => void;
   startOnlineMatchmaking: () => void;
@@ -121,12 +129,14 @@ const ONLINE_JITTER_EWMA_ALPHA = 0.2;
 const ONLINE_PREDICTION_BUFFER_MS = 6;
 const ONLINE_MIN_PREDICTION_DELAY_MS = 12;
 const ONLINE_MAX_PREDICTION_LEAD_TICKS = 1;
+const ROUND_START_COUNTDOWN_MS = 3_000;
 
 let localLoopHandle: number | null = null;
 let onlineClient: Client | null = null;
 let onlineRoom: Room | null = null;
 let matchmakingGeneration = 0;
 let transitionTimeoutHandle: number | null = null;
+let roundCountdownTimeoutHandle: number | null = null;
 let browserTransportPatched = false;
 let localManualTimeControl = false;
 let localManualTimeRemainderMs = 0;
@@ -219,6 +229,18 @@ function createOnlineSessionState(
   };
 }
 
+function createCountdownState(
+  override: Partial<MatchCountdownState> = {},
+): MatchCountdownState {
+  return {
+    active: false,
+    endsAtMs: null,
+    durationMs: 0,
+    source: "none",
+    ...override,
+  };
+}
+
 function createNewSession(): SessionSummary {
   return createSessionSummary({ roundNumber: 1 });
 }
@@ -281,6 +303,15 @@ function clearTransitionTimer(): void {
   }
   window.clearTimeout(transitionTimeoutHandle);
   transitionTimeoutHandle = null;
+}
+
+function clearRoundCountdownTimer(): void {
+  if (roundCountdownTimeoutHandle === null) {
+    return;
+  }
+
+  window.clearTimeout(roundCountdownTimeoutHandle);
+  roundCountdownTimeoutHandle = null;
 }
 
 function ensureBrowserTransportPatch(): void {
@@ -349,6 +380,18 @@ function resetOnlineRuntimeState(): void {
   onlineLastRttSampleMs = null;
   onlineCorrectionCount = 0;
   onlineLastCorrectionDistance = 0;
+}
+
+function activateLocalRound(setState: StoreSetState): void {
+  clearRoundCountdownTimer();
+  const next = engine.setStatus("running");
+  setState((state) => ({
+    ...state,
+    gameState: next,
+    countdown: createCountdownState(),
+    renderVersion: state.renderVersion + 1,
+  }));
+  startLocalTickLoop(setState);
 }
 
 function stopOnlineRoom(consented: boolean): void {
@@ -697,6 +740,7 @@ async function startOnlineMatchmaking(
   stopOnlineRoom(true);
   resetOnlineRuntimeState();
   clearTransitionTimer();
+  clearRoundCountdownTimer();
 
   const generation = ++matchmakingGeneration;
   setState((state) => ({
@@ -705,6 +749,7 @@ async function startOnlineMatchmaking(
     gameState: engine.reset("waiting"),
     transition: null,
     session: createSessionSummary(),
+    countdown: createCountdownState(),
     online: createOnlineSessionState({
       connecting: true,
       lastError: null,
@@ -814,11 +859,18 @@ async function startOnlineMatchmaking(
       const processedInputs = toProcessedInputSequences(networkState);
       const rngSeed = toRngSeed(networkState);
       const connectedPlayers = toFiniteNumber((networkState as AnyRecord).connectedPlayers, 0);
+      const countdownEndsAtMs = toFiniteNumber((networkState as AnyRecord).countdownEndsAtMs, 0);
+      const countdownDurationMs = toFiniteNumber((networkState as AnyRecord).countdownDurationMs, 0);
       const waitingForOpponent = nextGame.status === "waiting" && connectedPlayers < 2;
       const rematchVotes = {
         player1: toBoolean((networkState as AnyRecord).player1Rematch, false),
         player2: toBoolean((networkState as AnyRecord).player2Rematch, false),
       };
+      const countdownActive =
+        nextGame.status === "waiting" &&
+        connectedPlayers === 2 &&
+        countdownEndsAtMs > Date.now() &&
+        countdownDurationMs > 0;
 
       onlineAuthoritativeState = nextGame;
       onlineAuthoritativeTick = tick;
@@ -877,6 +929,14 @@ async function startOnlineMatchmaking(
           transition,
           renderVersion: state.renderVersion + 1,
           session: toSessionSummary(networkState),
+          countdown: countdownActive
+            ? createCountdownState({
+                active: true,
+                endsAtMs: countdownEndsAtMs,
+                durationMs: countdownDurationMs,
+                source: "online",
+              })
+            : createCountdownState(),
           online: createOnlineSessionState({
             ...state.online,
             connecting: false,
@@ -917,6 +977,7 @@ async function startOnlineMatchmaking(
         gameState: engine.reset("waiting"),
         transition: null,
         session: createSessionSummary(),
+        countdown: createCountdownState(),
         online: createOnlineSessionState({
           lastError: `Connexion fermée (${code})${reason ? `: ${reason}` : ""}`,
         }),
@@ -939,6 +1000,7 @@ async function startOnlineMatchmaking(
         gameState: engine.reset("waiting"),
         transition: null,
         session: createSessionSummary(),
+        countdown: createCountdownState(),
         online: createOnlineSessionState({
           ...state.online,
           connecting: false,
@@ -981,37 +1043,58 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
     renderVersion: 0,
     session: createSessionSummary(),
     online: createOnlineSessionState(),
+    countdown: createCountdownState(),
     startLocalGame: () => {
       resetLocalManualTimeControl();
       matchmakingGeneration += 1;
       stopOnlineRoom(true);
       resetOnlineRuntimeState();
       clearTransitionTimer();
-      const next = engine.reset("running");
+      clearRoundCountdownTimer();
+      const countdownEndsAtMs = Date.now() + ROUND_START_COUNTDOWN_MS;
+      const next = engine.reset("waiting");
       set((state) => ({
         ...state,
         mode: "local",
         gameState: next,
         transition: null,
         session: createNewSession(),
+        countdown: createCountdownState({
+          active: true,
+          endsAtMs: countdownEndsAtMs,
+          durationMs: ROUND_START_COUNTDOWN_MS,
+          source: "local",
+        }),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
-      startLocalTickLoop(set);
+      roundCountdownTimeoutHandle = window.setTimeout(() => {
+        activateLocalRound(set);
+      }, ROUND_START_COUNTDOWN_MS);
     },
     restartLocalGame: () => {
       resetLocalManualTimeControl();
       clearTransitionTimer();
-      const next = engine.reset("running");
+      clearRoundCountdownTimer();
+      const countdownEndsAtMs = Date.now() + ROUND_START_COUNTDOWN_MS;
+      const next = engine.reset("waiting");
       set((state) => ({
         ...state,
         mode: "local",
         gameState: next,
         transition: null,
         session: advanceSessionRound(state.session),
+        countdown: createCountdownState({
+          active: true,
+          endsAtMs: countdownEndsAtMs,
+          durationMs: ROUND_START_COUNTDOWN_MS,
+          source: "local",
+        }),
         renderVersion: state.renderVersion + 1,
       }));
-      startLocalTickLoop(set);
+      roundCountdownTimeoutHandle = window.setTimeout(() => {
+        activateLocalRound(set);
+      }, ROUND_START_COUNTDOWN_MS);
     },
     startOnlineMatchmaking: () => {
       void startOnlineMatchmaking(set);
@@ -1022,6 +1105,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       stopOnlineRoom(true);
       resetOnlineRuntimeState();
       clearTransitionTimer();
+      clearRoundCountdownTimer();
       const waiting = engine.reset("waiting");
       set((state) => ({
         ...state,
@@ -1029,6 +1113,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         gameState: waiting,
         transition: null,
         session: createSessionSummary(),
+        countdown: createCountdownState(),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
@@ -1048,6 +1133,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
       stopOnlineRoom(true);
       resetOnlineRuntimeState();
       clearTransitionTimer();
+      clearRoundCountdownTimer();
       const waiting = engine.reset("waiting");
       set((state) => ({
         ...state,
@@ -1055,6 +1141,7 @@ export const useLocalGameStore = create<LocalGameStoreState>((set, get) => {
         gameState: waiting,
         transition: null,
         session: createSessionSummary(),
+        countdown: createCountdownState(),
         online: createOnlineSessionState(),
         renderVersion: state.renderVersion + 1,
       }));
@@ -1153,6 +1240,7 @@ export function destroyLocalGameLoop(): void {
   stopOnlineRoom(true);
   resetOnlineRuntimeState();
   clearTransitionTimer();
+  clearRoundCountdownTimer();
 }
 
 type AnyRecord = Record<string, unknown>;
@@ -1188,6 +1276,7 @@ function renderGameToText(): string {
       displayTick: state.online.displayTick,
       network: state.online.network,
     },
+    countdown: state.countdown,
     automation: {
       manualTimeControl: localManualTimeControl,
     },

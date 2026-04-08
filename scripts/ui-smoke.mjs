@@ -271,7 +271,10 @@ async function runAutomationHooksScenario() {
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Jouer en Local/i }).click();
-  await page.waitForTimeout(100);
+  await page.waitForTimeout(120);
+
+  const countdownState = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
+  await page.waitForTimeout(3200);
 
   const before = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
   const zeroStepAdvance = await page.evaluate(() => window.advanceTime?.(0) ?? null);
@@ -294,6 +297,11 @@ async function runAutomationHooksScenario() {
   const afterManualAdvanceHeads =
     afterManualAdvance.game?.snakes?.map((snake) => snake.body?.[0] ?? null) ?? [];
 
+  pushAssertion(
+    "local automation exposes a pre-round countdown",
+    countdownState.countdown?.active === true && countdownState.game?.status === "waiting",
+    countdownState,
+  );
   pushAssertion("advanceTime(0) reports zero steps", zeroStepAdvance === 0, zeroStepAdvance);
   pushAssertion(
     "advanceTime(0) keeps the automatic loop running",
@@ -323,6 +331,7 @@ async function runAutomationHooksScenario() {
   return {
     scenario: "automation-hooks-local",
     screenshotPath,
+    countdownState,
     before,
     afterNoop,
     afterManualAdvance,
@@ -339,7 +348,7 @@ async function runMobileLocalGameOverScenario() {
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Jouer en Local/i }).click();
-  await page.waitForTimeout(4500);
+  await page.waitForTimeout(5200);
 
   const snapshot = await collectSnapshot(page);
   const bodyText = await page.locator("body").innerText();
@@ -461,8 +470,8 @@ async function runWebkitOnlineScenario() {
     page2.getByRole("button", { name: /Jouer en Ligne/i }).click(),
   ]);
 
-  await page1.waitForTimeout(4500);
-  await page2.waitForTimeout(4500);
+  await page1.waitForTimeout(2200);
+  await page2.waitForTimeout(2200);
 
   const snapshot = await collectSnapshot(page1);
   const screenshotPath = path.join(artifactsDir, "mobile-online-iphone-14pm.png");

@@ -35,6 +35,7 @@ export function App() {
   const transition = useLocalGameStore((state) => state.transition);
   const session = useLocalGameStore((state) => state.session);
   const online = useLocalGameStore((state) => state.online);
+  const countdown = useLocalGameStore((state) => state.countdown);
 
   const startLocalGame = useLocalGameStore((state) => state.startLocalGame);
   const restartLocalGame = useLocalGameStore((state) => state.restartLocalGame);
@@ -47,6 +48,7 @@ export function App() {
   const coarsePointer = useIsCoarsePointer();
   const orientation = useViewportOrientation();
   const fullscreen = useFullscreenSession();
+  const countdownDisplay = useCountdownDisplay(countdown);
 
   const player1 = gameState.snakes.find((snake) => snake.id === "player1");
   const player2 = gameState.snakes.find((snake) => snake.id === "player2");
@@ -55,40 +57,96 @@ export function App() {
   const isMatchmaking = mode === "matchmaking";
   const isLocal = mode === "local";
   const isOnline = mode === "online";
-  const canPauseLocal = isLocal && gameState.status !== "game_over";
   const paused = isLocal && gameState.status === "paused";
+  const canPauseLocal = isLocal && (gameState.status === "running" || gameState.status === "paused");
   const showGameOver =
     (isLocal || isOnline) &&
     gameState.status === "game_over" &&
     !transition?.fatalCollision;
-  const showOnlineWaiting = isOnline && online.waitingForOpponent && gameState.status === "waiting";
+  const showOnlineWaiting =
+    isOnline &&
+    online.waitingForOpponent &&
+    gameState.status === "waiting" &&
+    !countdown.active;
+  const showCountdownOverlay =
+    countdown.active &&
+    !isMatchmaking &&
+    !showOnlineWaiting &&
+    (isLocal || isOnline);
   const touchMode = coarsePointer ? (isLocal ? "local" : isOnline ? "online" : null) : null;
   const touchOnlineFocusMode = touchMode === "online" && onlineFocusMode;
   const splitTouchLocal = touchMode === "local" && orientation === "landscape";
-  const showTouchControls = Boolean(touchMode) && gameState.status === "running";
+  const showTouchControls =
+    Boolean(touchMode) && !isMenu && !isMatchmaking && gameState.status !== "game_over";
   const desktopGameMode = !isMenu && !touchMode;
+  const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
   const floatingTouchLocal = touchMode === "local" && !splitTouchLocal;
   const floatingTouchOnline = touchMode === "online" && !touchOnlineFocusMode;
   const mobileMenu = coarsePointer && isMenu;
-  const compactTopPanel = Boolean(touchMode) || mobileMenu || desktopGameMode;
-  const showHeader = !splitTouchLocal && !touchOnlineFocusMode && !(Boolean(touchMode) && !isMenu);
+  const showHeader = isMenu && !mobileMenu;
   const showTouchArenaSummary = Boolean(touchMode) && !isMenu && !splitTouchLocal && !touchOnlineFocusMode;
-  const shouldLockBodyScroll = Boolean(touchMode);
+  const shouldLockBodyScroll = Boolean(touchMode) || immersiveDesktopMode;
   const arenaSizeClass =
     touchOnlineFocusMode
       ? "h-full min-h-0"
       : splitTouchLocal
-      ? "h-[min(67svh,16.5rem)] min-h-[12.5rem] sm:h-[min(70svh,18.5rem)]"
-      : floatingTouchLocal
-        ? "h-[min(37svh,16rem)] min-h-[11.5rem] sm:h-[min(41svh,17.5rem)] sm:min-h-[12.5rem]"
-      : touchMode === "online"
-        ? "h-[min(42svh,17.5rem)] min-h-[12.5rem] sm:h-[min(46svh,19rem)] sm:min-h-[13.5rem]"
-      : desktopGameMode
-        ? "h-[min(calc(100svh-14rem),40rem)] min-h-[23rem] xl:h-[min(calc(100svh-13rem),44rem)]"
-      : mobileMenu
-        ? "h-[min(50svh,18rem)] min-h-[17rem]"
-      : "h-[min(62vh,32rem)] min-h-[360px] xl:h-[min(66vh,38rem)]";
+        ? "h-[min(68svh,18rem)] min-h-[12.5rem] sm:h-[min(72svh,20rem)]"
+        : floatingTouchLocal
+          ? "h-[min(40svh,17rem)] min-h-[12rem] sm:h-[min(44svh,19rem)]"
+          : touchMode === "online"
+            ? "h-[min(48svh,20rem)] min-h-[13rem] sm:h-[min(54svh,22rem)]"
+            : immersiveDesktopMode
+              ? "h-[calc(100svh-2.25rem)] min-h-[30rem]"
+              : desktopGameMode
+                ? "h-[min(calc(100svh-4rem),54rem)] min-h-[28rem]"
+                : mobileMenu
+                  ? "h-[min(50svh,18rem)] min-h-[17rem]"
+                  : "h-[min(62vh,32rem)] min-h-[360px] xl:h-[min(66vh,38rem)]";
+  const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
+  const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
+  const onlineSeatLabel = isOnline && online.ownSnakeId ? online.ownSnakeId.toUpperCase() : null;
+  const connectionWarning = isOnline ? toConnectionWarning(online.network) : null;
+  const phaseLabel = isMenu
+    ? "Menu"
+    : isMatchmaking
+      ? "Matchmaking"
+      : isOnline
+        ? showOnlineWaiting
+          ? "Room"
+          : "Online"
+        : isLocal
+          ? "Local"
+          : "Arena";
+  const headerTitle = "Snake Duel Arena";
+  const headerSubtitle = "Duel local instantane ou room online autoritaire, avec rendu Phaser et inputs buffers.";
+  const controlsLabel =
+    splitTouchLocal
+      ? "Paysage mobile: un pad par joueur."
+      : touchMode === "local"
+        ? "Touches locales tactiles."
+        : touchMode === "online"
+          ? "Touches online tactiles."
+          : toControlLabel(mode);
+  const desktopStatusChip = showCountdownOverlay
+    ? `Depart ${countdownDisplay.shortLabel}`
+    : showOnlineWaiting
+      ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
+      : paused
+        ? "Pause"
+        : connectionWarning;
+  const touchSummaryLabel = showOnlineWaiting
+    ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
+    : showCountdownOverlay
+      ? `Depart ${countdownDisplay.shortLabel}`
+      : paused
+        ? "Pause"
+        : isOnline
+          ? [onlineSeatLabel ?? "Online", connectionWarning].filter(Boolean).join(" • ")
+          : "Ready";
+  const touchFullscreenEnabled =
+    touchMode === "online" ? true : Boolean(touchMode) && fullscreen.supported;
+
   const handleToggleFullscreen = () => {
     void fullscreen.toggle(shellRef.current);
   };
@@ -100,80 +158,6 @@ export function App() {
 
     void fullscreen.toggle(shellRef.current);
   };
-  const touchFullscreenEnabled = touchMode === "online" ? true : Boolean(touchMode) && fullscreen.supported;
-  const roomStatusLabel = [
-    online.roomId ? `Room ${online.roomId}` : "Aucune room active",
-    online.ownSnakeId ? `Vous: ${online.ownSnakeId.toUpperCase()}` : null,
-    showOnlineWaiting
-      ? online.connectedPlayers > 0
-        ? `En attente (${Math.min(online.connectedPlayers, 2)}/2)`
-        : "En attente d'un adversaire"
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" • ");
-  const controlsLabel =
-    splitTouchLocal
-      ? "Mobile local paysage: un pad par joueur, chacun garde son cote."
-      : touchMode === "local"
-        ? "Mode tactile local."
-        : touchMode === "online"
-          ? "Mode tactile online."
-          : toControlLabel(mode);
-  const shouldRenderFooter =
-    !isMenu && !splitTouchLocal && !touchMode && !touchOnlineFocusMode && !mobileMenu && !desktopGameMode;
-  const roundLabel = session.roundNumber > 0 ? `Manche ${session.roundNumber}` : null;
-  const sessionScoreLabel = `${session.player1Wins} - ${session.player2Wins}`;
-  const networkChipAccent = toNetworkChipAccent(online.network.quality);
-  const latencyChipLabel = toLatencyChipLabel(online.network.latencyMs);
-  const jitterChipLabel = toJitterChipLabel(online.network.jitterMs);
-  const syncChipLabel = toSyncChipLabel(online.network);
-  const phaseLabel = isMenu
-    ? "Menu"
-    : isMatchmaking
-      ? "Matchmaking"
-      : isOnline
-        ? showOnlineWaiting
-          ? "Room en attente"
-          : "Online"
-        : isLocal
-          ? "Local"
-          : "Arena";
-  const headerTitle = isMenu
-    ? "Duel local ou online"
-    : isMatchmaking
-      ? "Recherche d'adversaire"
-      : showOnlineWaiting
-        ? "Room en attente"
-        : roundLabel
-          ? `${roundLabel} en cours`
-          : "Snake Duel Arena";
-  const headerSubtitle = isMenu
-    ? "Arena en wrap, inputs bufferises et rematchs synchronises pour des duels plus lisibles."
-    : isMatchmaking
-      ? "Connexion au matchmaking Colyseus en cours."
-      : isOnline
-        ? roomStatusLabel
-        : paused
-          ? "Pause locale. Reprenez la manche quand vous voulez."
-          : `Session ${sessionScoreLabel}`;
-  const touchSummaryLabel = showOnlineWaiting
-    ? `En attente ${Math.min(online.connectedPlayers, 2)}/2`
-    : isOnline
-      ? `${online.ownSnakeId?.toUpperCase() ?? "ONLINE"} • ${latencyChipLabel}`
-      : paused
-        ? "PAUSE"
-        : "RUN";
-  const desktopHeaderActionLabel =
-    desktopGameMode
-      ? isLocal && gameState.status !== "game_over"
-        ? paused
-          ? "Reprendre"
-          : "Pause"
-        : isOnline && gameState.status !== "game_over"
-          ? "Quitter la room"
-          : null
-      : null;
 
   useEffect(() => {
     if (!shouldLockBodyScroll) {
@@ -211,36 +195,28 @@ export function App() {
     primePhaserViewport();
     startOnlineMatchmaking();
   };
-  const handleDesktopHeaderAction = () => {
-    if (isLocal && gameState.status !== "game_over") {
-      togglePause();
-      return;
-    }
-
-    if (isOnline && gameState.status !== "game_over") {
-      returnToMenu();
-    }
-  };
 
   return (
     <main
       ref={shellRef}
       className={`app-shell relative overflow-x-hidden text-slate-100 ${
-        desktopGameMode
-          ? "px-4 py-3 sm:px-5 sm:py-3 lg:px-6 lg:py-3"
-          : splitTouchLocal
-            ? "px-4 pb-4 sm:px-6 sm:pb-5 lg:px-8"
-            : "px-4 py-5 sm:px-6 sm:py-6 lg:px-8"
+        immersiveDesktopMode
+          ? "px-3 py-3 sm:px-4"
+          : desktopGameMode
+            ? "px-4 py-3 sm:px-5 lg:px-6"
+            : splitTouchLocal
+              ? "px-4 pb-4 sm:px-6 sm:pb-5 lg:px-8"
+              : "px-4 py-5 sm:px-6 sm:py-6 lg:px-8"
       } ${
         splitTouchLocal
           ? "app-shell--touch-side"
           : desktopGameMode
             ? "app-shell--desktop-game"
-          : touchMode === "local"
-          ? "app-shell--touch-local"
-          : touchMode === "online"
-            ? "app-shell--touch-online"
-            : ""
+            : touchMode === "local"
+              ? "app-shell--touch-local"
+              : touchMode === "online"
+                ? "app-shell--touch-online"
+                : ""
       } ${touchOnlineFocusMode ? "app-shell--touch-online-focus" : ""} ${
         floatingTouchLocal ? "app-shell--floating-local-dock" : ""
       } ${floatingTouchOnline ? "app-shell--floating-online-dock" : ""}`}
@@ -249,133 +225,46 @@ export function App() {
         className={`mx-auto flex w-full flex-col ${
           touchOnlineFocusMode
             ? "h-full max-w-none gap-3"
-            : desktopGameMode
-              ? "max-w-[56rem] gap-3 sm:gap-4 xl:max-w-[60rem]"
-            : splitTouchLocal
-              ? "max-w-6xl gap-2 sm:gap-3"
-              : "gap-5"
+            : immersiveDesktopMode
+              ? "max-w-none gap-2"
+              : desktopGameMode
+                ? "max-w-[76rem] gap-3"
+                : splitTouchLocal
+                  ? "max-w-6xl gap-2 sm:gap-3"
+                  : "gap-5"
         }`}
       >
         {showHeader ? (
-          <header
-            className={`glass-panel flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between ${
-              compactTopPanel ? "p-3 sm:p-4" : "p-4 sm:p-5"
-            }`}
-          >
+          <header className="glass-panel flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
             <div>
               <p className="text-[10px] uppercase tracking-[0.32em] text-cyan-200/70">
                 Snake Duel Arena
               </p>
-              <h1
-                className={`mt-1 font-black tracking-tight ${
-                  compactTopPanel ? "text-xl sm:text-2xl" : "text-2xl sm:text-3xl"
-                }`}
-              >
+              <h1 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">
                 {headerTitle}
               </h1>
-              <p
-                className={`mt-1 text-slate-300 ${
-                  compactTopPanel ? "text-[11px] sm:text-xs" : "text-xs sm:text-sm"
-                }`}
-              >
+              <p className="mt-1 max-w-2xl text-xs text-slate-300 sm:text-sm">
                 {headerSubtitle}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <InfoChip label={phaseLabel} accent="teal" />
-                {roundLabel ? <InfoChip label={roundLabel} /> : null}
-                {!isMenu ? <InfoChip label={`Session ${sessionScoreLabel}`} accent="orange" /> : null}
-                {isOnline && online.ownSnakeId ? (
-                  <InfoChip label={online.ownSnakeId.toUpperCase()} />
-                ) : null}
-                {isOnline ? (
-                  <>
-                    <InfoChip
-                      label={latencyChipLabel}
-                      accent={networkChipAccent}
-                      className="min-w-[6.75rem] justify-center tabular-nums"
-                    />
-                    <InfoChip
-                      label={jitterChipLabel}
-                      compact
-                      className="min-w-[6.75rem] justify-center tabular-nums"
-                    />
-                    {syncChipLabel ? (
-                      <InfoChip
-                        label={syncChipLabel}
-                        accent="orange"
-                        compact
-                        className="min-w-[6.75rem] justify-center"
-                      />
-                    ) : null}
-                  </>
-                ) : null}
-                {isMenu ? (
-                  <>
-                    <InfoChip label="Wrap arena" />
-                    <InfoChip label="Buffer x3" />
-                    <InfoChip label="Clavier + tactile" />
-                  </>
-                ) : null}
+                <InfoChip label="Wrap arena" accent="teal" />
+                <InfoChip label="Buffer x3" />
+                <InfoChip label="Clavier + tactile" accent="orange" />
               </div>
-              {desktopGameMode ? (
-                <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-slate-300/88 sm:text-xs">
-                  {controlsLabel}
-                </p>
-              ) : null}
             </div>
-            <div className="flex flex-col items-end gap-2">
-              {isMenu && mobileMenu ? null : (
-                <div
-                  className={`grid grid-cols-2 gap-2 ${
-                    compactTopPanel ? "text-[11px]" : "text-xs sm:text-sm"
-                  }`}
-                >
-                  {isMenu ? (
-                    <>
-                      <StatCard
-                        title="Local"
-                        value="Instantane"
-                        detail="2 joueurs, clavier et tactile"
-                        accent="teal"
-                        compact={compactTopPanel}
-                      />
-                      <StatCard
-                        title="Online"
-                        value="Autoritaire"
-                        detail="Matchmaking, room sync et rematch"
-                        accent="orange"
-                        compact={compactTopPanel}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <StatCard
-                        title="J1"
-                        value={`${session.player1Wins} manche${session.player1Wins > 1 ? "s" : ""}`}
-                        detail={`${player1?.score ?? 0} pts • L${player1?.body.length ?? 0}`}
-                        accent="teal"
-                        compact={compactTopPanel}
-                      />
-                      <StatCard
-                        title="J2"
-                        value={`${session.player2Wins} manche${session.player2Wins > 1 ? "s" : ""}`}
-                        detail={`${player2?.score ?? 0} pts • L${player2?.body.length ?? 0}`}
-                        accent="orange"
-                        compact={compactTopPanel}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
-              {desktopHeaderActionLabel ? (
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleDesktopHeaderAction}
-                >
-                  {desktopHeaderActionLabel}
-                </button>
-              ) : null}
+            <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
+              <StatCard
+                title="Local"
+                value="Instantane"
+                detail="2 joueurs, meme ecran"
+                accent="teal"
+              />
+              <StatCard
+                title="Online"
+                value="Room sync"
+                detail="Matchmaking et rematch"
+                accent="orange"
+              />
             </div>
           </header>
         ) : null}
@@ -384,18 +273,54 @@ export function App() {
           className={`glass-panel relative overflow-hidden ${
             touchOnlineFocusMode
               ? "flex-1 min-h-0 p-2 sm:p-3"
-              : splitTouchLocal
-                ? "p-2 sm:p-3"
-                : compactTopPanel
+              : desktopGameMode
+                ? "p-2.5 sm:p-3"
+                : splitTouchLocal
                   ? "p-2 sm:p-3"
                   : "p-3 sm:p-4"
           } ${arenaSizeClass}`}
         >
-          <div
-            className={`relative h-full w-full rounded-2xl border border-slate-700/60 bg-[#030711]/70 p-2 ${
-              desktopGameMode ? "flex items-center justify-center" : ""
-            }`}
-          >
+          <div className="relative h-full w-full overflow-hidden rounded-[1.35rem] border border-slate-700/60 bg-[#020611]/78">
+            {desktopGameMode ? (
+              <div className="arena-topbar">
+                <div className="arena-topbar__cluster">
+                  <InfoChip label={phaseLabel} accent={isOnline ? "orange" : "teal"} compact />
+                  {roundLabel ? <InfoChip label={roundLabel} compact /> : null}
+                  <InfoChip label={`Session ${sessionScoreLabel}`} compact />
+                  {onlineSeatLabel ? <InfoChip label={onlineSeatLabel} compact /> : null}
+                  {desktopStatusChip ? (
+                    <InfoChip label={desktopStatusChip} accent="orange" compact />
+                  ) : null}
+                </div>
+
+                <div className="arena-topbar__cluster arena-topbar__cluster--end">
+                  <CompactArenaScore
+                    title="J1"
+                    value={`${session.player1Wins}M • ${player1?.score ?? 0} pts`}
+                    accent="teal"
+                  />
+                  <CompactArenaScore
+                    title="J2"
+                    value={`${session.player2Wins}M • ${player2?.score ?? 0} pts`}
+                    accent="orange"
+                  />
+                  {canPauseLocal ? (
+                    <ToolbarButton onClick={togglePause}>
+                      {paused ? "Reprendre" : "Pause"}
+                    </ToolbarButton>
+                  ) : null}
+                  {fullscreen.supported ? (
+                    <ToolbarButton onClick={handleToggleFullscreen}>
+                      {fullscreen.active ? "Quitter plein ecran" : "Plein ecran"}
+                    </ToolbarButton>
+                  ) : null}
+                  <ToolbarButton onClick={returnToMenu}>
+                    {isOnline ? "Quitter" : "Menu"}
+                  </ToolbarButton>
+                </div>
+              </div>
+            ) : null}
+
             {showTouchArenaSummary ? (
               <div className="arena-summary">
                 <div className="arena-summary__chips">
@@ -418,33 +343,41 @@ export function App() {
               </div>
             ) : null}
 
-            <div className={desktopGameMode ? "h-full aspect-square max-w-full" : "h-full w-full"}>
-              {shouldRenderPhaser ? (
-                <Suspense
-                  fallback={
-                    <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
-                      Chargement du rendu Phaser...
-                    </div>
-                  }
-                >
-                  <PhaserViewport />
-                </Suspense>
-              ) : (
-                <MenuArenaPreview />
-              )}
+            <div className={`h-full w-full ${desktopGameMode || touchOnlineFocusMode ? "grid place-items-center" : ""}`}>
+              <div
+                className={
+                  desktopGameMode || touchOnlineFocusMode
+                    ? "aspect-square h-full max-h-full w-full max-w-full"
+                    : "h-full w-full"
+                }
+              >
+                {shouldRenderPhaser ? (
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
+                        Chargement du rendu Phaser...
+                      </div>
+                    }
+                  >
+                    <PhaserViewport />
+                  </Suspense>
+                ) : (
+                  <MenuArenaPreview />
+                )}
+              </div>
             </div>
 
             {isMenu ? (
               <motion.div
                 key="menu"
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.12, ease: "easeOut" }}
                 className="overlay-panel"
               >
-                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Duel prêt</h2>
+                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Duel pret</h2>
                 <p className="mt-2 max-w-md text-center text-sm text-slate-300">
-                  Joue en local instantané ou en ligne via Colyseus matchmaking.
+                  Joue en local instantane ou en ligne via Colyseus matchmaking.
                 </p>
                 <div className="mt-6 flex flex-wrap justify-center gap-3">
                   <button
@@ -466,8 +399,9 @@ export function App() {
                     Jouer en Ligne
                   </button>
                 </div>
+                <p className="mt-4 text-center text-xs text-slate-400">{controlsLabel}</p>
                 {online.lastError ? (
-                  <p className="mt-4 text-center text-xs text-rose-300">{online.lastError}</p>
+                  <p className="mt-3 text-center text-xs text-rose-300">{online.lastError}</p>
                 ) : null}
               </motion.div>
             ) : null}
@@ -479,14 +413,16 @@ export function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16, ease: "easeOut" }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <div className="loader-orbit" />
                   <p className="mt-4 text-xs uppercase tracking-[0.28em] text-slate-300">
                     Matchmaking
                   </p>
-                  <p className="mt-1 text-sm text-slate-300">Recherche d'un adversaire...</p>
+                  <p className="mt-1 text-center text-sm text-slate-300">
+                    Recherche d&apos;un adversaire...
+                  </p>
                   <button type="button" className="btn-secondary mt-5" onClick={cancelMatchmaking}>
                     Annuler
                   </button>
@@ -501,7 +437,7 @@ export function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16, ease: "easeOut" }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <div className="loader-orbit" />
@@ -522,13 +458,38 @@ export function App() {
             </AnimatePresence>
 
             <AnimatePresence>
+              {showCountdownOverlay ? (
+                <motion.div
+                  key="countdown"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
+                  className="overlay-subpanel"
+                >
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-300">
+                    {roundLabel ?? "Nouvelle manche"}
+                  </p>
+                  <div className="countdown-ring">
+                    <span className="countdown-ring__digit">{countdownDisplay.shortLabel}</span>
+                  </div>
+                  <p className="mt-4 text-center text-sm text-slate-200">
+                    {isOnline
+                      ? "Synchronisation des deux joueurs avant le depart."
+                      : "Preparez les deux serpents avant le coup d&apos;envoi."}
+                  </p>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+
+            <AnimatePresence>
               {paused ? (
                 <motion.div
                   key="paused"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16, ease: "easeOut" }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <p className="text-sm uppercase tracking-[0.25em] text-slate-300">Pause</p>
@@ -543,10 +504,10 @@ export function App() {
               {showGameOver ? (
                 <motion.div
                   key="game-over"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
                   className="overlay-subpanel"
                 >
                   <p className="text-xs uppercase tracking-[0.25em] text-slate-300">Game Over</p>
@@ -622,26 +583,6 @@ export function App() {
             />
           ) : null}
         </AnimatePresence>
-
-        {shouldRenderFooter ? (
-          <footer
-            className={`glass-panel flex flex-wrap items-center justify-between gap-3 text-slate-300 ${
-              compactTopPanel ? "p-3 text-[11px] sm:text-xs" : "p-4 text-xs sm:text-sm"
-            }`}
-          >
-            <p>{controlsLabel}</p>
-            {isLocal && gameState.status !== "game_over" ? (
-              <button type="button" className="btn-secondary" onClick={togglePause}>
-                {paused ? "Reprendre" : "Pause"}
-              </button>
-            ) : null}
-            {isOnline && gameState.status !== "game_over" ? (
-              <button type="button" className="btn-secondary" onClick={returnToMenu}>
-                Quitter la room
-              </button>
-            ) : null}
-          </footer>
-        ) : null}
       </div>
     </main>
   );
@@ -673,6 +614,23 @@ function InfoChip({ label, accent = "slate", compact = false, className }: InfoC
   );
 }
 
+interface ToolbarButtonProps {
+  readonly children: string;
+  readonly onClick: () => void;
+}
+
+function ToolbarButton({ children, onClick }: ToolbarButtonProps) {
+  return (
+    <button
+      type="button"
+      className="min-h-[2.45rem] rounded-full border border-slate-500/40 bg-slate-950/78 px-3 py-2 text-[11px] font-semibold text-slate-100 transition hover:border-cyan-300/40 hover:bg-slate-900/85"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
 interface CompactArenaScoreProps {
   readonly title: string;
   readonly value: string;
@@ -693,10 +651,9 @@ interface StatCardProps {
   readonly value: string;
   readonly detail: string;
   readonly accent: "teal" | "orange";
-  readonly compact?: boolean;
 }
 
-function StatCard({ title, value, detail, accent, compact = false }: StatCardProps) {
+function StatCard({ title, value, detail, accent }: StatCardProps) {
   return (
     <div
       className={`rounded-xl border px-3 py-2 ${
@@ -706,10 +663,8 @@ function StatCard({ title, value, detail, accent, compact = false }: StatCardPro
       }`}
     >
       <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300">{title}</p>
-      <p className={`mt-1 font-bold ${compact ? "text-sm sm:text-base" : "text-base"}`}>{value}</p>
-      <p className={`${compact ? "text-[10px] sm:text-[11px]" : "text-[11px]"} text-slate-300`}>
-        {detail}
-      </p>
+      <p className="mt-1 text-base font-bold">{value}</p>
+      <p className="text-[11px] text-slate-300">{detail}</p>
     </div>
   );
 }
@@ -724,60 +679,74 @@ function toWinnerLabel(winner: "player1" | "player2" | "draw" | null): string {
   if (winner === "draw") {
     return "Match nul";
   }
-  return "Partie terminée";
+  return "Partie terminee";
 }
 
 function toControlLabel(mode: string): string {
   if (mode === "local") {
-    return "Clavier local: WASD (J1), flèches (J2), espace (pause)";
+    return "Clavier local: WASD (J1), fleches (J2), espace (pause).";
   }
   if (mode === "online") {
-    return "Clavier online: WASD ou flèches (votre serpent)";
+    return "Clavier online: WASD ou fleches pour votre serpent.";
   }
   if (mode === "matchmaking") {
-    return "Connexion en cours au matchmaking Colyseus...";
+    return "Connexion en cours au matchmaking Colyseus.";
   }
   return "Choisissez un mode puis lancez la partie.";
 }
 
-function toLatencyChipLabel(latencyMs: number | null): string {
-  return latencyMs === null ? "Ping --" : `Ping ${latencyMs}ms`;
-}
-
-function toJitterChipLabel(jitterMs: number | null): string {
-  return jitterMs === null ? "Jitter --" : `Jitter ${jitterMs}ms`;
-}
-
-function toSyncChipLabel(network: {
+function toConnectionWarning(network: {
   readonly quality: "unknown" | "excellent" | "good" | "fair" | "poor";
   readonly pendingInputs: number;
   readonly lastCorrectionDistance: number;
 }): string | null {
   if (network.pendingInputs >= 2) {
-    return `Queue ${network.pendingInputs}`;
+    return "File d'inputs chargee";
   }
 
   if (network.lastCorrectionDistance > 1) {
-    return "Resync";
+    return "Resynchronisation";
   }
 
   if (network.quality === "fair" || network.quality === "poor") {
-    return "Sync fragile";
+    return "Connexion fragile";
   }
 
   return null;
 }
 
-function toNetworkChipAccent(
-  quality: "unknown" | "excellent" | "good" | "fair" | "poor",
-): "teal" | "orange" | "slate" {
-  if (quality === "excellent" || quality === "good") {
-    return "teal";
+interface CountdownStateShape {
+  readonly active: boolean;
+  readonly endsAtMs: number | null;
+}
+
+function useCountdownDisplay(countdown: CountdownStateShape): {
+  readonly shortLabel: string;
+} {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!countdown.active || !countdown.endsAtMs) {
+      return;
+    }
+
+    setNow(Date.now());
+    const handle = window.setInterval(() => {
+      setNow(Date.now());
+    }, 100);
+
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [countdown.active, countdown.endsAtMs]);
+
+  if (!countdown.active || !countdown.endsAtMs) {
+    return { shortLabel: "0" };
   }
 
-  if (quality === "fair" || quality === "poor") {
-    return "orange";
-  }
-
-  return "slate";
+  const remainingMs = countdown.endsAtMs - now;
+  const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  return {
+    shortLabel: remainingSeconds > 0 ? String(remainingSeconds) : "GO",
+  };
 }

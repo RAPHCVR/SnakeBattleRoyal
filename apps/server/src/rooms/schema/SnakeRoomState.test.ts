@@ -38,8 +38,12 @@ describe("applyGameStateToSchema", () => {
       player1Wins: 1,
       player2Wins: 1,
     };
+    const countdown = {
+      endsAtMs: 12_345,
+      durationMs: 3_000,
+    };
 
-    applyGameStateToSchema(state, game, 9, tickEvent, session);
+    applyGameStateToSchema(state, game, 9, tickEvent, session, undefined, countdown);
 
     expect(state.status).toBe("game_over");
     expect(state.winner).toBe("player2");
@@ -57,6 +61,8 @@ describe("applyGameStateToSchema", () => {
     expect(state.roundNumber).toBe(3);
     expect(state.player1Wins).toBe(1);
     expect(state.player2Wins).toBe(1);
+    expect(state.countdownEndsAtMs).toBe(12_345);
+    expect(state.countdownDurationMs).toBe(3_000);
     expect(state.snakes).toHaveLength(2);
     expect(state.snakes[0]?.id).toBe("player1");
     expect(state.snakes[0]?.body).toHaveLength(3);
@@ -102,6 +108,8 @@ describe("applyGameStateToSchema", () => {
     expect(state.roundNumber).toBe(0);
     expect(state.player1Wins).toBe(0);
     expect(state.player2Wins).toBe(0);
+    expect(state.countdownEndsAtMs).toBe(0);
+    expect(state.countdownDurationMs).toBe(0);
     expect(state.snakes).toHaveLength(1);
     expect(state.snakes[0]?.id).toBe("player1");
   });

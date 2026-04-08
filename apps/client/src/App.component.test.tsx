@@ -65,6 +65,7 @@ import { App } from "./App.js";
 
 describe("App component states", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     mocks.controls.coarsePointer = false;
     mocks.controls.orientation = "portrait";
     mocks.controls.fullscreen.supported = false;
@@ -75,11 +76,17 @@ describe("App component states", () => {
     mocks.storeState = createStoreState();
   });
 
-  it("renders touch controls during a running local match on touch devices", async () => {
+  it("renders touch controls during a local pre-round countdown on touch devices", async () => {
     mocks.controls.coarsePointer = true;
     mocks.storeState = createStoreState({
       mode: "local",
-      gameState: createGameState("running"),
+      gameState: createGameState("waiting"),
+      countdown: {
+        active: true,
+        endsAtMs: Date.now() + 3_000,
+        durationMs: 3_000,
+        source: "local",
+      },
     });
 
     render(<App />);
@@ -102,7 +109,7 @@ describe("App component states", () => {
     expect(screen.getByText("Match nul")).toBeInTheDocument();
   });
 
-  it("shows the waiting overlay without touch controls for a solo online room", () => {
+  it("shows the waiting overlay while keeping touch controls available for fullscreen actions", () => {
     mocks.controls.coarsePointer = true;
     mocks.storeState = createStoreState({
       mode: "online",
@@ -118,12 +125,12 @@ describe("App component states", () => {
 
     render(<App />);
 
-    expect(screen.queryByTestId("touch-controls-dock")).not.toBeInTheDocument();
+    expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:online");
     expect(screen.getAllByText("Room en attente")).not.toHaveLength(0);
     expect(screen.getByText(/En attente d'un adversaire/i)).toBeInTheDocument();
   });
 
-  it("exposes compact network telemetry during online play", () => {
+  it("hides raw network telemetry during stable online play", () => {
     mocks.storeState = createStoreState({
       mode: "online",
       gameState: createGameState("running"),
@@ -147,13 +154,13 @@ describe("App component states", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Ping 38ms")).toBeInTheDocument();
-    expect(screen.getByText("Jitter 7ms")).toBeInTheDocument();
-    expect(screen.queryByText("Queue 1")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sync stable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ping 38ms")).not.toBeInTheDocument();
+    expect(screen.queryByText("Jitter 7ms")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sync fragile")).not.toBeInTheDocument();
+    expect(screen.getByText("PLAYER1")).toBeInTheDocument();
   });
 
-  it("surfaces sync warnings only when telemetry is actually degraded", () => {
+  it("surfaces connection warnings only when telemetry is actually degraded", () => {
     mocks.storeState = createStoreState({
       mode: "online",
       gameState: createGameState("running"),
@@ -177,7 +184,35 @@ describe("App component states", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Sync fragile")).toBeInTheDocument();
+    expect(screen.getByText("Connexion fragile")).toBeInTheDocument();
+  });
+
+  it("shows a countdown overlay before the round starts", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+
+    mocks.storeState = createStoreState({
+      mode: "local",
+      gameState: createGameState("waiting"),
+      session: {
+        roundNumber: 4,
+        player1Wins: 2,
+        player2Wins: 1,
+      },
+      countdown: {
+        active: true,
+        endsAtMs: Date.now() + 3_000,
+        durationMs: 3_000,
+        source: "local",
+      },
+    });
+
+    render(<App />);
+
+    expect(screen.getAllByText("Manche 4")).not.toHaveLength(0);
+    expect(screen.getAllByText("3")).not.toHaveLength(0);
+
+    vi.useRealTimers();
   });
 });
 
@@ -185,18 +220,30 @@ function createStoreState(
   overrides: Partial<{
     mode: string;
     gameState: GameState;
+    session: {
+      roundNumber: number;
+      player1Wins: number;
+      player2Wins: number;
+    };
     online: Partial<Record<string, unknown>>;
+    countdown: {
+      active: boolean;
+      endsAtMs: number | null;
+      durationMs: number;
+      source: "none" | "local" | "online";
+    };
   }> = {},
 ): Record<string, unknown> {
   return {
     mode: overrides.mode ?? "menu",
     gameState: overrides.gameState ?? createGameState("waiting"),
     transition: null,
-    session: {
-      roundNumber: 0,
-      player1Wins: 0,
-      player2Wins: 0,
-    },
+    session:
+      overrides.session ?? {
+        roundNumber: 0,
+        player1Wins: 0,
+        player2Wins: 0,
+      },
     online: {
       connecting: false,
       roomId: null,
@@ -223,6 +270,13 @@ function createStoreState(
       },
       ...(overrides.online ?? {}),
     },
+    countdown:
+      overrides.countdown ?? {
+        active: false,
+        endsAtMs: null,
+        durationMs: 0,
+        source: "none",
+      },
     startLocalGame: vi.fn(),
     restartLocalGame: vi.fn(),
     startOnlineMatchmaking: vi.fn(),

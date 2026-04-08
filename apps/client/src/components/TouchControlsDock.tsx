@@ -61,7 +61,7 @@ export function TouchControlsDock({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: 0.18, ease: "easeOut" }}
+        transition={{ duration: 0.12, ease: "easeOut" }}
         className={`touch-dock${floating ? " touch-dock--floating" : " touch-dock--online-inline"}`}
       >
         <div
@@ -69,9 +69,9 @@ export function TouchControlsDock({
             floating ? "touch-dock__inner--floating" : "touch-dock__inner--online-inline"
           }`}
         >
-          <div className="touch-dock__floating-header">
+          <div className="touch-dock__floating-header touch-dock__floating-header--single-row">
             <p className="touch-dock__floating-label">Online</p>
-            <div className="touch-dock__floating-actions">
+            <div className="touch-dock__floating-actions touch-dock__floating-actions--single-row">
               {showFullscreenToggle ? (
                 <FullscreenToggleButton
                   active={fullscreenActive}
@@ -110,13 +110,13 @@ export function TouchControlsDock({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: 0.18, ease: "easeOut" }}
+        transition={{ duration: 0.12, ease: "easeOut" }}
         className="touch-dock touch-dock--floating"
       >
         <div className="touch-dock__inner touch-dock__inner--floating-local">
-          <div className="touch-dock__floating-header">
+          <div className="touch-dock__floating-header touch-dock__floating-header--single-row">
             <p className="touch-dock__floating-label">Local</p>
-            <div className="touch-dock__floating-actions">
+            <div className="touch-dock__floating-actions touch-dock__floating-actions--single-row">
               {primaryActionLabel && onPrimaryAction ? (
                 <button
                   type="button"
@@ -162,10 +162,10 @@ export function TouchControlsDock({
   return (
     <motion.aside
       key={`touch-dock-${mode}`}
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 18 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
       className="touch-dock"
     >
       <div className="touch-dock__inner">
@@ -260,7 +260,7 @@ export function LandscapeSplitControls({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
       className="touch-side-controls"
       aria-label="Commandes tactiles paysage"
     >
@@ -465,8 +465,9 @@ function FullscreenToggleButton({
       type="button"
       className={`touch-pill-button touch-pill-button--fullscreen${compact ? " touch-pill-button--compact" : ""}`}
       onClick={onClick}
+      aria-label={active ? "Quitter plein ecran" : "Plein ecran"}
     >
-      {active ? "Quitter plein ecran" : "Plein ecran"}
+      {compact ? (active ? "Quitter PE" : "Plein ecran") : active ? "Quitter plein ecran" : "Plein ecran"}
     </button>
   );
 }
