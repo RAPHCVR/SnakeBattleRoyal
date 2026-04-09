@@ -2,7 +2,7 @@
 
 import "./test/setup-component.js";
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState } from "@snake-duel/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -110,7 +110,7 @@ describe("App component states", () => {
     expect(screen.getByText("Chargement du rendu Phaser...")).toBeInTheDocument();
   });
 
-  it("switches local touch fullscreen into split side controls", () => {
+  it("tries browser fullscreen before falling back to split side controls", async () => {
     mocks.controls.coarsePointer = true;
     mocks.controls.orientation = "portrait";
     mocks.storeState = createStoreState({
@@ -122,7 +122,8 @@ describe("App component states", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Plein ecran" }));
 
-    expect(screen.getByTestId("touch-controls-landscape")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.controls.fullscreen.toggle).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId("touch-controls-landscape")).toBeInTheDocument());
     expect(screen.queryByTestId("touch-controls-dock")).not.toBeInTheDocument();
   });
 

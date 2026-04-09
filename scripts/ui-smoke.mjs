@@ -47,6 +47,7 @@ try {
   results.push(await runMobileMenuScenario());
   results.push(await runMobileLocalScenario());
   results.push(await runMobileLocalFullscreenScenario());
+  results.push(await runAndroidMobileLocalFullscreenScenario());
   results.push(await runAutomationHooksScenario());
   results.push(await runMobileLocalGameOverScenario());
   results.push(await runAndroidPortraitScenario());
@@ -453,6 +454,52 @@ async function runMobileLocalFullscreenScenario() {
   await browser.close();
 
   return { scenario: "mobile-local-iphone-se-fullscreen", screenshotPath, snapshot, issues };
+}
+
+async function runAndroidMobileLocalFullscreenScenario() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ ...devices["Pixel 5"] });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Local/i }).click();
+  await page.waitForTimeout(1200);
+  await page.getByRole("button", { name: /Plein ecran/i }).click();
+  await page.waitForTimeout(500);
+
+  const snapshot = await collectSnapshot(page);
+  const fullscreenState = await page.evaluate(() => ({
+    active: Boolean(document.fullscreenElement),
+    tagName: document.fullscreenElement?.tagName ?? null,
+  }));
+  const screenshotPath = path.join(artifactsDir, "mobile-local-pixel5-fullscreen.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion(
+    "android mobile fullscreen enters the browser fullscreen API",
+    fullscreenState.active === true && fullscreenState.tagName === "MAIN",
+    fullscreenState,
+  );
+  pushAssertion("android mobile fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion("android mobile fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
+  pushAssertion("android mobile fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
+  pushAssertion(
+    "android mobile fullscreen keeps every control visible",
+    snapshot.buttons.every((button) => !button.outOfViewport),
+    snapshot.buttons,
+  );
+  pushAssertion("android mobile fullscreen keeps the arena within viewport", !snapshot.section?.outOfViewport, snapshot.section);
+  pushAssertion(
+    "android mobile fullscreen has no page errors",
+    issues.pageErrors.length === 0,
+    issues.pageErrors,
+  );
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "mobile-local-pixel5-fullscreen", screenshotPath, snapshot, fullscreenState, issues };
 }
 
 async function runAutomationHooksScenario() {

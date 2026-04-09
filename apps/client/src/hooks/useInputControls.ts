@@ -275,11 +275,23 @@ function isFullscreenActive(): boolean {
 
 async function requestFullscreen(target: HTMLElement): Promise<boolean> {
   const fullscreenTarget = target as FullscreenCapableElement;
-  const nativeRequest =
-    typeof target.requestFullscreen === "function"
-      ? () => target.requestFullscreen()
-      : fullscreenTarget.webkitRequestFullscreen;
+  if (typeof target.requestFullscreen === "function") {
+    try {
+      await target.requestFullscreen({ navigationUI: "hide" });
+      await lockLandscapeOrientation();
+      return true;
+    } catch {
+      try {
+        await target.requestFullscreen();
+        await lockLandscapeOrientation();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
 
+  const nativeRequest = fullscreenTarget.webkitRequestFullscreen;
   if (!nativeRequest) {
     return false;
   }

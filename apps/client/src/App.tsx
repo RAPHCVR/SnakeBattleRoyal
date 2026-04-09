@@ -77,14 +77,17 @@ export function App() {
   const touchMode = coarsePointer ? (isLocal ? "local" : isOnline ? "online" : null) : null;
   const touchLocalFocusMode = touchMode === "local" && localFocusMode;
   const touchOnlineFocusMode = touchMode === "online" && onlineFocusMode;
-  const touchFocusMode = touchLocalFocusMode || touchOnlineFocusMode;
-  const splitTouchLocal = touchMode === "local" && (orientation === "landscape" || touchLocalFocusMode);
+  const touchLocalImmersiveMode = touchMode === "local" && (fullscreen.active || touchLocalFocusMode);
+  const touchOnlineImmersiveMode = touchMode === "online" && (fullscreen.active || touchOnlineFocusMode);
+  const touchFocusMode = touchLocalImmersiveMode || touchOnlineImmersiveMode;
+  const splitTouchLocal =
+    touchMode === "local" && (orientation === "landscape" || touchLocalImmersiveMode);
   const showTouchControls =
     Boolean(touchMode) && !isMenu && !isMatchmaking && gameState.status !== "game_over";
   const desktopGameMode = !isMenu && !touchMode;
   const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
-  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalFocusMode;
+  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalImmersiveMode;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
   const showDesktopArenaHud = desktopGameMode;
@@ -165,18 +168,44 @@ export function App() {
   const handleToggleFullscreen = () => {
     void fullscreen.toggle(shellRef.current);
   };
-  const handleToggleTouchFullscreen = () => {
+  const handleToggleTouchFullscreen = async () => {
     if (touchMode === "local") {
-      setLocalFocusMode((current) => !current);
+      if (fullscreen.active) {
+        await fullscreen.toggle(shellRef.current);
+        return;
+      }
+
+      if (touchLocalFocusMode) {
+        setLocalFocusMode(false);
+        return;
+      }
+
+      const entered = await fullscreen.toggle(shellRef.current);
+      if (!entered) {
+        setLocalFocusMode(true);
+      }
       return;
     }
 
     if (touchMode === "online") {
-      setOnlineFocusMode((current) => !current);
+      if (fullscreen.active) {
+        await fullscreen.toggle(shellRef.current);
+        return;
+      }
+
+      if (touchOnlineFocusMode) {
+        setOnlineFocusMode(false);
+        return;
+      }
+
+      const entered = await fullscreen.toggle(shellRef.current);
+      if (!entered) {
+        setOnlineFocusMode(true);
+      }
       return;
     }
 
-    void fullscreen.toggle(shellRef.current);
+    await fullscreen.toggle(shellRef.current);
   };
 
   useEffect(() => {
@@ -202,6 +231,20 @@ export function App() {
       setOnlineFocusMode(false);
     }
   }, [coarsePointer, mode]);
+
+  useEffect(() => {
+    if (!fullscreen.active) {
+      return;
+    }
+
+    if (touchLocalFocusMode) {
+      setLocalFocusMode(false);
+    }
+
+    if (touchOnlineFocusMode) {
+      setOnlineFocusMode(false);
+    }
+  }, [fullscreen.active, touchLocalFocusMode, touchOnlineFocusMode]);
 
   const primePhaserViewport = () => {
     void loadPhaserViewport();
@@ -599,7 +642,7 @@ export function App() {
               showPauseAction={canPauseLocal}
               onTogglePause={togglePause}
               fullscreenSupported
-              fullscreenActive={touchLocalFocusMode}
+              fullscreenActive={touchLocalImmersiveMode}
               onToggleFullscreen={handleToggleTouchFullscreen}
             />
           ) : showTouchControls && touchMode ? (
@@ -609,7 +652,7 @@ export function App() {
               compact={floatingTouchLocal}
               suggestLandscape={touchMode === "local"}
               fullscreenSupported={touchFullscreenEnabled}
-              fullscreenActive={touchMode === "online" ? touchOnlineFocusMode : touchLocalFocusMode}
+              fullscreenActive={touchMode === "online" ? touchOnlineImmersiveMode : touchLocalImmersiveMode}
               onToggleFullscreen={handleToggleTouchFullscreen}
               {...(touchMode === "local" && canPauseLocal
                 ? {
