@@ -54,14 +54,15 @@ export interface OnlineRenderTimingSnapshot {
 
 export interface RemoteRenderDebugSnapshot {
   readonly headFrames: number;
-  readonly headInterpolatedFrames: number;
-  readonly headExtrapolatedFrames: number;
-  readonly headHeldFrames: number;
-  readonly headSevereHeldFrames: number;
-  readonly maxHeadUnderrunMs: number;
-  readonly interpolationDelayMs: number;
-  readonly headSnapshotCount: number;
-  readonly headLatestSnapshotAgeMs: number | null;
+  readonly headMovingFrames: number;
+  readonly headSettledFrames: number;
+  readonly currentHeadX: number | null;
+  readonly currentHeadY: number | null;
+  readonly targetHeadX: number | null;
+  readonly targetHeadY: number | null;
+  readonly headTargetDistancePx: number;
+  readonly maxHeadTargetDistancePx: number;
+  readonly motionDurationMs: number;
 }
 
 declare global {

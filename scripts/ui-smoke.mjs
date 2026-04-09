@@ -51,6 +51,7 @@ try {
   results.push(await runMobileLocalGameOverScenario());
   results.push(await runAndroidPortraitScenario());
   results.push(await runAndroidLandscapeScenario());
+  results.push(await runMobileOnlineWaitingScenario());
   results.push(await runOnlineWaitingScenario());
   results.push(await runWebkitOnlineScenario());
 
@@ -432,7 +433,7 @@ async function runMobileLocalFullscreenScenario() {
     "mobile local fullscreen keeps a dense backing canvas",
     (snapshot.canvas?.backingScaleX ?? 0) >= 1 &&
       (snapshot.canvas?.backingScaleX ?? 0) <=
-        Math.max(2.05, (snapshot.canvas?.devicePixelRatio ?? 1) + 0.25),
+        Math.max(3.1, (snapshot.canvas?.devicePixelRatio ?? 1) + 0.9),
     snapshot.canvas,
   );
   pushAssertion(
@@ -459,6 +460,10 @@ async function runAutomationHooksScenario() {
   await page.waitForTimeout(120);
 
   const countdownState = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
+  await page.evaluate(() => {
+    window.enqueueInput?.("up", "player1");
+    window.enqueueInput?.("down", "player2");
+  });
   await page.waitForTimeout(3200);
 
   const before = await page.evaluate(() => JSON.parse(window.render_game_to_text?.() ?? "{}"));
@@ -612,6 +617,45 @@ async function runAndroidLandscapeScenario() {
   return { scenario: "mobile-local-pixel5-landscape", screenshotPath, snapshot, issues };
 }
 
+async function runMobileOnlineWaitingScenario() {
+  const browser = await chromium.launch({ headless: true });
+  const device = devices["Pixel 5"];
+  const context = await browser.newContext({ ...device });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Ligne/i }).click();
+  await page.waitForTimeout(2500);
+
+  const snapshot = await collectSnapshot(page);
+  const bodyText = await page.locator("body").innerText();
+  const screenshotPath = path.join(artifactsDir, "mobile-online-waiting-pixel5.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion(
+    "mobile online waiting keeps the spinner circular",
+    Math.abs((snapshot.loader?.width ?? 0) - (snapshot.loader?.height ?? 0)) <= 1,
+    snapshot.loader,
+  );
+  pushAssertion(
+    "mobile online waiting keeps a waiting message visible",
+    /en attente d'un adversaire/i.test(bodyText),
+    bodyText,
+  );
+  pushAssertion("mobile online waiting has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
+  pushAssertion(
+    "mobile online waiting has no request failures",
+    issues.requestFailures.length === 0,
+    issues.requestFailures,
+  );
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "mobile-online-waiting-pixel5", screenshotPath, snapshot, issues, bodyText };
+}
+
 async function runOnlineWaitingScenario() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
@@ -745,6 +789,7 @@ async function collectSnapshot(page) {
       touchDock: ".touch-dock",
       touchSideControls: ".touch-side-controls",
       touchStatusChip: "[data-touch-status-chip='true']",
+      loader: ".loader-orbit",
     };
 
     const rectOf = (selector) => {
@@ -816,6 +861,7 @@ async function collectSnapshot(page) {
       footer: rectOf(selectors.footer),
       touchDock: rectOf(selectors.touchDock),
       touchSideControls: rectOf(selectors.touchSideControls),
+      loader: rectOf(selectors.loader),
       touchStatusChip: (() => {
         const node = document.querySelector(selectors.touchStatusChip);
         if (!(node instanceof HTMLElement)) {

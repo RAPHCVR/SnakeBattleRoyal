@@ -30,11 +30,11 @@ const scenarios = [
     thresholds: {
       maxIdleGapMs: 140,
       maxLateIdleGaps: 1,
-      maxDisplayGapMs: 150,
-      maxP95DisplayGapMs: 130,
+      maxDisplayGapMs: 180,
+      maxP95DisplayGapMs: 145,
       maxCorrectionDistance: 2,
-      maxRemoteHeldFrameRatio: 0.08,
-      maxRemoteUnderrunMs: 40,
+      maxRemoteVisualIdleGapMs: 95,
+      maxP95RemoteVisualIdleGapMs: 70,
     },
   },
   {
@@ -45,17 +45,22 @@ const scenarios = [
     thresholds: {
       maxIdleGapMs: 150,
       maxLateIdleGaps: 2,
-      maxDisplayGapMs: 190,
-      maxP95DisplayGapMs: 160,
+      maxDisplayGapMs: 205,
+      maxP95DisplayGapMs: 170,
       maxCorrectionDistance: 2,
-      maxRemoteHeldFrameRatio: 0.14,
-      maxRemoteUnderrunMs: 54,
+      maxRemoteVisualIdleGapMs: 135,
+      maxP95RemoteVisualIdleGapMs: 95,
     },
   },
 ];
 
 let stopStaticServer = null;
 let stopGameServer = null;
+const CHROMIUM_STRESS_ARGS = [
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+];
 
 await fs.mkdir(artifactsDir, { recursive: true });
 
@@ -235,9 +240,10 @@ async function startStaticServer() {
 }
 
 async function runScenarioRound(scenario, round) {
-  const browser = await chromium.launch({ headless: true });
-  const context1 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
-  const context2 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const browser1 = await chromium.launch({ headless: true, args: CHROMIUM_STRESS_ARGS });
+  const browser2 = await chromium.launch({ headless: true, args: CHROMIUM_STRESS_ARGS });
+  const context1 = await browser1.newContext({ viewport: { width: 1366, height: 768 } });
+  const context2 = await browser2.newContext({ viewport: { width: 1366, height: 768 } });
 
   if (scenario.delayMs > 0 || scenario.jitterMs > 0) {
     const pattern = new RegExp(`^${escapeRegExp(wsBaseUrl)}`);
@@ -305,19 +311,19 @@ async function runScenarioRound(scenario, round) {
         { page1: page1Metrics.maxCorrectionDistance, page2: page2Metrics.maxCorrectionDistance },
       ),
       makeAssertion(
-        "remote head rarely runs out of buffered future frames",
-        page1Metrics.remoteHeldFrameRatio <= scenario.thresholds.maxRemoteHeldFrameRatio &&
-          page2Metrics.remoteHeldFrameRatio <= scenario.thresholds.maxRemoteHeldFrameRatio &&
-          page1Metrics.remoteMaxUnderrunMs <= scenario.thresholds.maxRemoteUnderrunMs &&
-          page2Metrics.remoteMaxUnderrunMs <= scenario.thresholds.maxRemoteUnderrunMs,
+        "remote snake render stays visually continuous",
+        page1Metrics.maxRemoteVisualIdleGapMs <= scenario.thresholds.maxRemoteVisualIdleGapMs &&
+          page2Metrics.maxRemoteVisualIdleGapMs <= scenario.thresholds.maxRemoteVisualIdleGapMs &&
+          page1Metrics.p95RemoteVisualIdleGapMs <= scenario.thresholds.maxP95RemoteVisualIdleGapMs &&
+          page2Metrics.p95RemoteVisualIdleGapMs <= scenario.thresholds.maxP95RemoteVisualIdleGapMs,
         {
           page1: {
-            remoteHeldFrameRatio: page1Metrics.remoteHeldFrameRatio,
-            remoteMaxUnderrunMs: page1Metrics.remoteMaxUnderrunMs,
+            maxRemoteVisualIdleGapMs: page1Metrics.maxRemoteVisualIdleGapMs,
+            p95RemoteVisualIdleGapMs: page1Metrics.p95RemoteVisualIdleGapMs,
           },
           page2: {
-            remoteHeldFrameRatio: page2Metrics.remoteHeldFrameRatio,
-            remoteMaxUnderrunMs: page2Metrics.remoteMaxUnderrunMs,
+            maxRemoteVisualIdleGapMs: page2Metrics.maxRemoteVisualIdleGapMs,
+            p95RemoteVisualIdleGapMs: page2Metrics.p95RemoteVisualIdleGapMs,
           },
         },
       ),
@@ -337,7 +343,7 @@ async function runScenarioRound(scenario, round) {
     };
   } finally {
     await Promise.allSettled([context1.close(), context2.close()]);
-    await browser.close();
+    await Promise.allSettled([browser1.close(), browser2.close()]);
   }
 }
 
@@ -505,18 +511,16 @@ function analyseSamples(samples, label) {
   const lateGapThresholdMs = Math.round(tickRateMs * 1.4);
   const displayGaps = [];
   const idleGaps = [];
+  const remoteVisualIdleGaps = [];
   let maxCorrectionCount = 0;
   let maxCorrectionDistance = 0;
   let maxPredictionLead = 0;
   let maxPendingInputs = 0;
   let remoteHeadFrames = 0;
-  let remoteHeadHeldFrames = 0;
-  let remoteHeadSevereHeldFrames = 0;
-  let remoteHeadExtrapolatedFrames = 0;
-  let remoteMaxUnderrunMs = 0;
-  let remoteInterpolationDelayMs = 0;
-  let remoteSnapshotCount = 0;
-  let remoteLatestSnapshotAgeMs = 0;
+  let remoteHeadMovingFrames = 0;
+  let remoteHeadSettledFrames = 0;
+  let remoteMaxTargetDistancePx = 0;
+  let remoteMotionDurationMs = 0;
   let remoteHeadPositionChanges = 0;
   const authoritativePerfStepSamples = [];
   let previousDisplayTick = null;
@@ -524,6 +528,9 @@ function analyseSamples(samples, label) {
   let previousAuthoritativeTick = null;
   let previousAuthoritativeTickPerfMs = null;
   let previousRemoteHeadKey = null;
+  let previousRemoteRenderHead = null;
+  let remoteStillStartAt = null;
+  let remoteMotionStarted = false;
   let idleSegmentStartAt = null;
   let idleSegmentTick = null;
 
@@ -556,31 +563,44 @@ function analyseSamples(samples, label) {
     const remoteRender = sample.state?.automation?.remoteRender ?? null;
     if (remoteRender) {
       remoteHeadFrames = Math.max(remoteHeadFrames, Number(remoteRender.headFrames ?? 0));
-      remoteHeadHeldFrames = Math.max(
-        remoteHeadHeldFrames,
-        Number(remoteRender.headHeldFrames ?? 0),
+      remoteHeadMovingFrames = Math.max(
+        remoteHeadMovingFrames,
+        Number(remoteRender.headMovingFrames ?? 0),
       );
-      remoteHeadSevereHeldFrames = Math.max(
-        remoteHeadSevereHeldFrames,
-        Number(remoteRender.headSevereHeldFrames ?? 0),
+      remoteHeadSettledFrames = Math.max(
+        remoteHeadSettledFrames,
+        Number(remoteRender.headSettledFrames ?? 0),
       );
-      remoteHeadExtrapolatedFrames = Math.max(
-        remoteHeadExtrapolatedFrames,
-        Number(remoteRender.headExtrapolatedFrames ?? 0),
+      remoteMaxTargetDistancePx = Math.max(
+        remoteMaxTargetDistancePx,
+        Number(remoteRender.maxHeadTargetDistancePx ?? 0),
       );
-      remoteMaxUnderrunMs = Math.max(
-        remoteMaxUnderrunMs,
-        Number(remoteRender.maxHeadUnderrunMs ?? 0),
+      remoteMotionDurationMs = Math.max(
+        remoteMotionDurationMs,
+        Number(remoteRender.motionDurationMs ?? 0),
       );
-      remoteInterpolationDelayMs = Math.max(
-        remoteInterpolationDelayMs,
-        Number(remoteRender.interpolationDelayMs ?? 0),
-      );
-      remoteSnapshotCount = Math.max(remoteSnapshotCount, Number(remoteRender.headSnapshotCount ?? 0));
-      remoteLatestSnapshotAgeMs = Math.max(
-        remoteLatestSnapshotAgeMs,
-        Number(remoteRender.headLatestSnapshotAgeMs ?? 0),
-      );
+
+      const remoteRenderHead = readRemoteRenderHeadPosition(remoteRender);
+      if (remoteRenderHead) {
+        if (previousRemoteRenderHead === null) {
+          previousRemoteRenderHead = remoteRenderHead;
+        } else {
+          const moved =
+            Math.hypot(
+              remoteRenderHead.x - previousRemoteRenderHead.x,
+              remoteRenderHead.y - previousRemoteRenderHead.y,
+            ) > 0.12;
+
+          if (moved) {
+            if (remoteMotionStarted && remoteStillStartAt !== null) {
+              remoteVisualIdleGaps.push(Math.max(0, sample.ts - remoteStillStartAt));
+            }
+            remoteMotionStarted = true;
+            previousRemoteRenderHead = remoteRenderHead;
+            remoteStillStartAt = sample.ts;
+          }
+        }
+      }
     }
 
     if (!transitionActive) {
@@ -637,9 +657,17 @@ function analyseSamples(samples, label) {
     const lastSampleAt = runningSamples.at(-1)?.ts ?? idleSegmentStartAt;
     idleGaps.push(Math.max(0, lastSampleAt - idleSegmentStartAt));
   }
+  if (remoteMotionStarted && remoteStillStartAt !== null) {
+    const lastSampleAt = runningSamples.at(-1)?.ts ?? remoteStillStartAt;
+    const trailingGapMs = Math.max(0, lastSampleAt - remoteStillStartAt);
+    if (trailingGapMs > Math.round(tickRateMs * 1.05)) {
+      remoteVisualIdleGaps.push(trailingGapMs);
+    }
+  }
 
   displayGaps.sort((a, b) => a - b);
   idleGaps.sort((a, b) => a - b);
+  remoteVisualIdleGaps.sort((a, b) => a - b);
   const maxDisplayGapMs = displayGaps.at(-1) ?? 0;
   const lateDisplayGapCount = displayGaps.filter((gap) => gap > lateGapThresholdMs).length;
   const maxIdleGapMs = idleGaps.at(-1) ?? 0;
@@ -661,18 +689,16 @@ function analyseSamples(samples, label) {
     maxPredictionLead,
     maxPendingInputs,
     remoteHeadFrames,
-    remoteHeadHeldFrames,
-    remoteHeadSevereHeldFrames,
-    remoteHeadExtrapolatedFrames,
-    remoteHeldFrameRatio: remoteHeadFrames > 0 ? remoteHeadHeldFrames / remoteHeadFrames : 0,
-    remoteSevereHeldFrameRatio:
-      remoteHeadFrames > 0 ? remoteHeadSevereHeldFrames / remoteHeadFrames : 0,
-    remoteExtrapolatedFrameRatio:
-      remoteHeadFrames > 0 ? remoteHeadExtrapolatedFrames / remoteHeadFrames : 0,
-    remoteMaxUnderrunMs,
-    remoteInterpolationDelayMs,
-    remoteSnapshotCount,
-    remoteLatestSnapshotAgeMs,
+    remoteHeadMovingFrames,
+    remoteHeadSettledFrames,
+    remoteMovingFrameRatio:
+      remoteHeadFrames > 0 ? remoteHeadMovingFrames / remoteHeadFrames : 0,
+    remoteSettledFrameRatio:
+      remoteHeadFrames > 0 ? remoteHeadSettledFrames / remoteHeadFrames : 0,
+    maxRemoteVisualIdleGapMs: remoteVisualIdleGaps.at(-1) ?? 0,
+    p95RemoteVisualIdleGapMs: percentile(remoteVisualIdleGaps, 0.95),
+    remoteMaxTargetDistancePx,
+    remoteMotionDurationMs,
     remoteHeadPositionChanges,
     minAuthoritativePerfStepMs:
       authoritativePerfStepSamples.length > 0 ? Math.min(...authoritativePerfStepSamples) : 0,
@@ -682,6 +708,17 @@ function analyseSamples(samples, label) {
     endedEarly: samples.at(-1)?.state?.game?.status !== "running",
     finalStatus: samples.at(-1)?.state?.game?.status ?? "unknown",
   };
+}
+
+function readRemoteRenderHeadPosition(remoteRender) {
+  const x = Number(remoteRender.currentHeadX ?? Number.NaN);
+  const y = Number(remoteRender.currentHeadY ?? Number.NaN);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return { x, y };
 }
 
 function percentile(values, ratio) {

@@ -8,7 +8,7 @@ import {
 } from "../localGameStore.js";
 import {
   mergeControlledSnake,
-  resolveRemoteInterpolationDelayMs,
+  resolveRemoteSmoothingDurationMs,
 } from "../localGameStore.helpers.js";
 import { FOOD_PARTICLE_TEXTURE, GRID_HEIGHT, GRID_WIDTH } from "./constants.js";
 import {
@@ -21,9 +21,6 @@ import {
   alignWorldPosition,
   interpolateTimedWorld,
   resolveWrappedWorld,
-  sampleBufferedWorld,
-  type BufferedWorldResult,
-  type BufferedWorldSample,
   type WorldPoint,
 } from "./segmentMotion.js";
 
@@ -38,23 +35,24 @@ interface TimedSegmentMotion {
   durationMs: number;
 }
 
-interface BufferedSegmentMotion {
-  readonly kind: "buffered";
+interface RemoteSegmentMotion {
+  readonly kind: "remote";
   currentWorld: WorldPoint;
-  snapshots: BufferedWorldSample[];
-  interpolationDelayMs: number;
+  startWorld: WorldPoint;
+  targetWorld: WorldPoint;
+  startedAtMs: number;
+  durationMs: number;
+  targetTick: number;
 }
 
-type SegmentMotion = TimedSegmentMotion | BufferedSegmentMotion;
+type SegmentMotion = TimedSegmentMotion | RemoteSegmentMotion;
 
 type SnakeArenaGlobal = typeof globalThis & {
   __SNAKE_DUEL_RENDER_DEBUG__?: RemoteRenderDebugSnapshot;
 };
 
-const REMOTE_SNAPSHOT_LIMIT = 6;
-const REMOTE_DELAY_RISE_ALPHA = 0.45;
-const REMOTE_DELAY_FALL_ALPHA = 0.12;
-const REMOTE_MAX_EXTRAPOLATION_DISTANCE_RATIO = 0.34;
+const REMOTE_TARGET_SETTLE_EPSILON_PX = 0.12;
+const REMOTE_MAX_COAST_RATIO = 0.18;
 
 const PALETTE = {
   board: 0x0b1220,
@@ -71,14 +69,15 @@ const PALETTE = {
 function createRemoteRenderDebugSnapshot(): RemoteRenderDebugSnapshot {
   return {
     headFrames: 0,
-    headInterpolatedFrames: 0,
-    headExtrapolatedFrames: 0,
-    headHeldFrames: 0,
-    headSevereHeldFrames: 0,
-    maxHeadUnderrunMs: 0,
-    interpolationDelayMs: 0,
-    headSnapshotCount: 0,
-    headLatestSnapshotAgeMs: null,
+    headMovingFrames: 0,
+    headSettledFrames: 0,
+    currentHeadX: null,
+    currentHeadY: null,
+    targetHeadX: null,
+    targetHeadY: null,
+    headTargetDistancePx: 0,
+    maxHeadTargetDistancePx: 0,
+    motionDurationMs: 0,
   };
 }
 
@@ -91,15 +90,6 @@ function writeRemoteRenderDebugSnapshot(snapshot: RemoteRenderDebugSnapshot | nu
   }
 
   globalObject.__SNAKE_DUEL_RENDER_DEBUG__ = snapshot;
-}
-
-function easeRemoteInterpolationDelayMs(currentDelayMs: number, targetDelayMs: number): number {
-  if (!Number.isFinite(currentDelayMs) || currentDelayMs <= 0) {
-    return targetDelayMs;
-  }
-
-  const alpha = targetDelayMs >= currentDelayMs ? REMOTE_DELAY_RISE_ALPHA : REMOTE_DELAY_FALL_ALPHA;
-  return currentDelayMs + (targetDelayMs - currentDelayMs) * alpha;
 }
 
 export class SnakeArenaScene extends Phaser.Scene {
@@ -129,9 +119,9 @@ export class SnakeArenaScene extends Phaser.Scene {
     this.handleResize();
   }
 
-  public override update(_time: number, delta: number): void {
+  public override update(): void {
     this.renderFromStore(false);
-    this.advanceSegmentMotion(delta, performance.now());
+    this.advanceSegmentMotion(performance.now());
   }
 
   private handleResize(): void {
@@ -189,15 +179,7 @@ export class SnakeArenaScene extends Phaser.Scene {
     const transition = storeState.transition;
     const previous = transition?.previous;
     const transitionDurationMs = Math.max(1, transition?.durationMs ?? state.config.tickRateMs);
-    const remoteInterpolationDelayMs =
-      storeState.mode === "online" ? state.config.tickRateMs : transitionDurationMs;
-    const onlineRemoteInterpolationDelayMs =
-      storeState.mode === "online"
-        ? this.resolveRemoteBufferDelayMs(state.config.tickRateMs)
-        : remoteInterpolationDelayMs;
     const nowMs = performance.now();
-    const remoteSnapshotAtMs =
-      storeState.mode === "online" ? (storeState.online.authoritativeTickPerfMs ?? nowMs) : nowMs;
     const snapPositions =
       force ||
       this.snapNextRender ||
@@ -212,10 +194,9 @@ export class SnakeArenaScene extends Phaser.Scene {
       layout,
       snapPositions,
       transitionDurationMs,
-      onlineRemoteInterpolationDelayMs,
       ownSnakeId,
       nowMs,
-      remoteSnapshotAtMs,
+      storeState.mode === "online" ? storeState.online.authoritativeTick : -1,
     );
     this.snapNextRender = false;
 
@@ -308,10 +289,9 @@ export class SnakeArenaScene extends Phaser.Scene {
     layout: ArenaBoardLayout,
     snapPositions: boolean,
     transitionDurationMs: number,
-    remoteInterpolationDelayMs: number,
     ownSnakeId: SnakeState["id"] | null,
     nowMs: number,
-    remoteSnapshotAtMs: number,
+    authoritativeTick: number,
   ): void {
     const previousById = new Map(previous?.snakes.map((snake) => [snake.id, snake]) ?? []);
     const activeKeys = new Set<string>();
@@ -343,10 +323,13 @@ export class SnakeArenaScene extends Phaser.Scene {
             key,
             remoteSnake
               ? {
-                  kind: "buffered",
+                  kind: "remote",
                   currentWorld: snappedWorld,
-                  snapshots: [{ atMs: remoteSnapshotAtMs, world: snappedWorld }],
-                  interpolationDelayMs: remoteInterpolationDelayMs,
+                  startWorld: snappedWorld,
+                  targetWorld: snappedWorld,
+                  startedAtMs: nowMs,
+                  durationMs: 0,
+                  targetTick: Math.max(0, authoritativeTick),
                 }
               : {
                   kind: "timed",
@@ -362,49 +345,46 @@ export class SnakeArenaScene extends Phaser.Scene {
         }
 
         if (remoteSnake) {
-          const lastWorld =
-            motion.kind === "buffered"
-              ? (motion.snapshots.at(-1)?.world ?? motion.currentWorld)
-              : motion.currentWorld;
-          const alignedTarget = alignWorldPosition(layout, lastWorld, segment);
-          const previousSnapshot = motion.kind === "buffered" ? motion.snapshots.at(-1) : null;
-          const snapshotAtMs =
-            previousSnapshot !== null && previousSnapshot !== undefined
-              ? Math.max(previousSnapshot.atMs + 1, remoteSnapshotAtMs)
-              : remoteSnapshotAtMs;
-          const bufferedSnapshots = motion.kind === "buffered" ? [...motion.snapshots] : [];
-          const nextSnapshots =
-            previousSnapshot &&
-            areSameWorldPoint(previousSnapshot.world, alignedTarget)
-              ? (() => {
-                  if (bufferedSnapshots.length === 0) {
-                    return [{ atMs: snapshotAtMs, world: alignedTarget }];
-                  }
+          const currentWorld =
+            motion.kind === "remote"
+              ? this.resolveRemoteMotionWorld(motion, nowMs)
+              : this.resolveTimedMotionWorld(motion, nowMs);
+          const alignedTarget = alignWorldPosition(layout, currentWorld, segment);
+          const previousTargetTick =
+            motion.kind === "remote" ? motion.targetTick : Math.max(0, authoritativeTick - 1);
+          const nextTargetTick = Math.max(previousTargetTick, authoritativeTick);
 
-                  bufferedSnapshots[bufferedSnapshots.length - 1] = {
-                    atMs: snapshotAtMs,
-                    world: alignedTarget,
-                  };
-                  return bufferedSnapshots.slice(-REMOTE_SNAPSHOT_LIMIT);
-                })()
-              : [...bufferedSnapshots, { atMs: snapshotAtMs, world: alignedTarget }].slice(
-                  -REMOTE_SNAPSHOT_LIMIT,
-                );
+          if (motion.kind === "remote" && areSameWorldPoint(motion.targetWorld, alignedTarget)) {
+            this.segmentMotion.set(key, {
+              ...motion,
+              currentWorld,
+              targetTick: nextTargetTick,
+            });
+            continue;
+          }
 
           this.segmentMotion.set(key, {
-            kind: "buffered",
-            currentWorld: motion.currentWorld,
-            snapshots: nextSnapshots,
-            interpolationDelayMs: remoteInterpolationDelayMs,
+            kind: "remote",
+            currentWorld,
+            startWorld: currentWorld,
+            targetWorld: alignedTarget,
+            startedAtMs: nowMs,
+            durationMs: this.resolveRemoteMotionDurationMs(
+              state.config.tickRateMs,
+              Math.max(1, nextTargetTick - previousTargetTick),
+            ),
+            targetTick: nextTargetTick,
           });
           continue;
         }
 
-        const alignedTarget = alignWorldPosition(layout, motion.currentWorld, segment);
+        const currentWorld =
+          motion.kind === "remote" ? motion.currentWorld : this.resolveTimedMotionWorld(motion, nowMs);
+        const alignedTarget = alignWorldPosition(layout, currentWorld, segment);
         this.segmentMotion.set(key, {
           kind: "timed",
-          currentWorld: motion.currentWorld,
-          startWorld: motion.currentWorld,
+          currentWorld,
+          startWorld: currentWorld,
           targetWorld: alignedTarget,
           startedAtMs: nowMs,
           durationMs: transitionDurationMs,
@@ -483,17 +463,11 @@ export class SnakeArenaScene extends Phaser.Scene {
     return node;
   }
 
-  private advanceSegmentMotion(deltaMs: number, nowMs: number): void {
+  private advanceSegmentMotion(nowMs: number): void {
     const layout = this.layout;
     if (!layout) {
       return;
     }
-
-    const storeState = useLocalGameStore.getState();
-    const targetRemoteInterpolationDelayMs =
-      storeState.mode === "online"
-        ? this.resolveRemoteBufferDelayMs(storeState.gameState.config.tickRateMs)
-        : null;
 
     for (const [key, motion] of this.segmentMotion) {
       const node = this.segments.get(key);
@@ -502,97 +476,88 @@ export class SnakeArenaScene extends Phaser.Scene {
         continue;
       }
 
-      let world = motion.currentWorld;
-      if (motion.kind === "timed") {
-        world = interpolateTimedWorld(
-          motion.startWorld,
-          motion.targetWorld,
-          nowMs - motion.startedAtMs,
-          motion.durationMs,
-        );
-        motion.currentWorld = world;
-      } else {
-        if (targetRemoteInterpolationDelayMs !== null) {
-          motion.interpolationDelayMs = easeRemoteInterpolationDelayMs(
-            motion.interpolationDelayMs,
-            targetRemoteInterpolationDelayMs,
-          );
-        }
+      const world =
+        motion.kind === "remote"
+          ? this.resolveRemoteMotionWorld(motion, nowMs)
+          : this.resolveTimedMotionWorld(motion, nowMs);
+      motion.currentWorld = world;
 
-        const renderAtMs = nowMs - motion.interpolationDelayMs;
-        const sampledWorld = sampleBufferedWorld(motion.snapshots, renderAtMs, {
-          maxExtrapolationMs: Math.min(
-            42,
-            Math.max(16, Math.round(motion.interpolationDelayMs * 0.22)),
-          ),
-          maxExtrapolationDistanceRatio: REMOTE_MAX_EXTRAPOLATION_DISTANCE_RATIO,
-        });
-        if (sampledWorld) {
-          world = sampledWorld.world;
-          motion.currentWorld = world;
-          if (key.endsWith("-0")) {
-            this.recordRemoteHeadRenderSample(
-              sampledWorld,
-              motion.interpolationDelayMs,
-              motion.snapshots,
-              nowMs,
-            );
-          }
-        }
-
-        while (
-          motion.snapshots.length > 2 &&
-          motion.snapshots[1] &&
-          motion.snapshots[1]!.atMs <= renderAtMs
-        ) {
-          motion.snapshots.shift();
-        }
+      if (motion.kind === "remote" && key.endsWith("-0")) {
+        this.recordRemoteHeadRenderSample(motion, world);
       }
 
       this.renderSegmentWorld(node, ghost, layout, world);
     }
   }
 
-  private resolveRemoteBufferDelayMs(tickRateMs: number): number {
+  private resolveRemoteMotionDurationMs(tickRateMs: number, deltaTicks: number): number {
     const renderTiming = getOnlineRenderTimingSnapshot();
-    return resolveRemoteInterpolationDelayMs({
+    return resolveRemoteSmoothingDurationMs({
       tickRateMs,
-      latencyMs: renderTiming.latencyMs,
       jitterMs: renderTiming.jitterMs,
-      authoritativeGapMs: renderTiming.authoritativeGapMs,
       authoritativeIntervalMs: renderTiming.authoritativeIntervalMs,
       authoritativeJitterMs: renderTiming.authoritativeJitterMs,
+      deltaTicks,
     });
   }
 
-  private recordRemoteHeadRenderSample(
-    sampledWorld: BufferedWorldResult,
-    interpolationDelayMs: number,
-    snapshots: readonly BufferedWorldSample[],
-    nowMs: number,
-  ): void {
-    const latestSnapshot = snapshots.at(-1) ?? null;
+  private resolveTimedMotionWorld(motion: TimedSegmentMotion, nowMs: number): WorldPoint {
+    return interpolateTimedWorld(
+      motion.startWorld,
+      motion.targetWorld,
+      nowMs - motion.startedAtMs,
+      motion.durationMs,
+    );
+  }
+
+  private resolveRemoteMotionWorld(motion: RemoteSegmentMotion, nowMs: number): WorldPoint {
+    const elapsedMs = nowMs - motion.startedAtMs;
+    const clampedElapsedMs = Math.max(0, Math.min(elapsedMs, motion.durationMs));
+    const interpolated = interpolateTimedWorld(
+      motion.startWorld,
+      motion.targetWorld,
+      clampedElapsedMs,
+      motion.durationMs,
+    );
+
+    if (elapsedMs <= motion.durationMs || motion.durationMs <= 0) {
+      return interpolated;
+    }
+
+    const coastRatio = Math.min(
+      REMOTE_MAX_COAST_RATIO,
+      Math.max(0, (elapsedMs - motion.durationMs) / Math.max(1, motion.durationMs)),
+    );
+    if (coastRatio <= 0) {
+      return interpolated;
+    }
+
+    return {
+      x: motion.targetWorld.x + (motion.targetWorld.x - motion.startWorld.x) * coastRatio,
+      y: motion.targetWorld.y + (motion.targetWorld.y - motion.startWorld.y) * coastRatio,
+    };
+  }
+
+  private recordRemoteHeadRenderSample(motion: RemoteSegmentMotion, world: WorldPoint): void {
+    const headTargetDistancePx = measureWorldDistance(world, motion.targetWorld);
     this.remoteRenderDebug = {
       headFrames: this.remoteRenderDebug.headFrames + 1,
-      headInterpolatedFrames:
-        this.remoteRenderDebug.headInterpolatedFrames +
-        (sampledWorld.mode === "interpolated" ? 1 : 0),
-      headExtrapolatedFrames:
-        this.remoteRenderDebug.headExtrapolatedFrames +
-        (sampledWorld.mode === "extrapolated" ? 1 : 0),
-      headHeldFrames:
-        this.remoteRenderDebug.headHeldFrames + (sampledWorld.mode === "held-latest" ? 1 : 0),
-      headSevereHeldFrames:
-        this.remoteRenderDebug.headSevereHeldFrames +
-        (sampledWorld.mode === "held-latest" && sampledWorld.underrunMs >= 45 ? 1 : 0),
-      maxHeadUnderrunMs: Math.max(
-        this.remoteRenderDebug.maxHeadUnderrunMs,
-        Math.round(sampledWorld.underrunMs),
+      headMovingFrames:
+        this.remoteRenderDebug.headMovingFrames +
+        (headTargetDistancePx > REMOTE_TARGET_SETTLE_EPSILON_PX ? 1 : 0),
+      headSettledFrames:
+        this.remoteRenderDebug.headSettledFrames +
+        (headTargetDistancePx <= REMOTE_TARGET_SETTLE_EPSILON_PX ? 1 : 0),
+      currentHeadX: roundMetric(world.x),
+      currentHeadY: roundMetric(world.y),
+      targetHeadX: roundMetric(motion.targetWorld.x),
+      targetHeadY: roundMetric(motion.targetWorld.y),
+      headTargetDistancePx: roundMetric(headTargetDistancePx),
+      maxHeadTargetDistancePx: Math.max(
+        this.remoteRenderDebug.maxHeadTargetDistancePx,
+        roundMetric(headTargetDistancePx),
       ),
-      interpolationDelayMs: Math.round(interpolationDelayMs),
-      headSnapshotCount: snapshots.length,
-      headLatestSnapshotAgeMs:
-        latestSnapshot === null ? null : Math.max(0, Math.round(nowMs - latestSnapshot.atMs)),
+      motionDurationMs: Math.round(motion.durationMs),
     };
     writeRemoteRenderDebugSnapshot(this.remoteRenderDebug);
   }
@@ -613,16 +578,6 @@ export class SnakeArenaScene extends Phaser.Scene {
     }
 
     ghost.setVisible(false);
-  }
-
-  private clearWrapGhost(key: string): void {
-    const ghost = this.wrapGhosts.get(key);
-    if (!ghost) {
-      return;
-    }
-
-    ghost.destroy();
-    this.wrapGhosts.delete(key);
   }
 
   private startFoodPulse(): void {
@@ -695,4 +650,12 @@ function didSnakeDieThisTick(previous: SnakeState | undefined, next: SnakeState)
 
 function areSameWorldPoint(a: WorldPoint, b: WorldPoint): boolean {
   return a.x === b.x && a.y === b.y;
+}
+
+function measureWorldDistance(from: WorldPoint, to: WorldPoint): number {
+  return Math.hypot(to.x - from.x, to.y - from.y);
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 100) / 100;
 }

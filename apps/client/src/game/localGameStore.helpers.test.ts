@@ -10,7 +10,7 @@ import {
   mergeControlledSnake,
   resolvePredictionLeadLimit,
   resolveAuthoritativeTickPerfMs,
-  resolveRemoteInterpolationDelayMs,
+  resolveRemoteSmoothingDurationMs,
   resolvePredictionStepDelayMs,
   resolveNextTickDelayMs,
   selectStableClockOffsetMs,
@@ -464,38 +464,42 @@ describe("network helpers", () => {
     ).toBe(2);
   });
 
-  it("adds interpolation slack for remote entities when jitter grows", () => {
+  it("keeps remote smoothing slightly behind the authoritative target to avoid visual stalls", () => {
     expect(
-      resolveRemoteInterpolationDelayMs({
+      resolveRemoteSmoothingDurationMs({
         tickRateMs: 100,
-        latencyMs: null,
         jitterMs: null,
       }),
-    ).toBe(145);
+    ).toBe(108);
     expect(
-      resolveRemoteInterpolationDelayMs({
+      resolveRemoteSmoothingDurationMs({
         tickRateMs: 100,
-        latencyMs: 36,
         jitterMs: 5,
       }),
-    ).toBe(155);
+    ).toBe(111);
     expect(
-      resolveRemoteInterpolationDelayMs({
+      resolveRemoteSmoothingDurationMs({
         tickRateMs: 100,
-        latencyMs: 128,
         jitterMs: 18,
       }),
-    ).toBe(203);
+    ).toBe(120);
     expect(
-      resolveRemoteInterpolationDelayMs({
+      resolveRemoteSmoothingDurationMs({
         tickRateMs: 100,
-        latencyMs: 36,
         jitterMs: 5,
-        authoritativeGapMs: 146,
         authoritativeIntervalMs: 128,
         authoritativeJitterMs: 24,
       }),
-    ).toBe(216);
+    ).toBe(136);
+    expect(
+      resolveRemoteSmoothingDurationMs({
+        tickRateMs: 100,
+        jitterMs: 18,
+        authoritativeIntervalMs: 128,
+        authoritativeJitterMs: 24,
+        deltaTicks: 2,
+      }),
+    ).toBe(272);
   });
 
   it("keeps authoritative tick timing close to the fixed timeline while following the server clock", () => {

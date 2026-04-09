@@ -241,54 +241,41 @@ export function resolvePredictionLeadLimit({
   return 2;
 }
 
-export function resolveRemoteInterpolationDelayMs({
+export function resolveRemoteSmoothingDurationMs({
   tickRateMs,
-  latencyMs,
   jitterMs,
-  authoritativeGapMs,
   authoritativeIntervalMs,
   authoritativeJitterMs,
+  deltaTicks = 1,
 }: {
   readonly tickRateMs: number;
-  readonly latencyMs: number | null;
   readonly jitterMs: number | null;
-  readonly authoritativeGapMs?: number | null;
   readonly authoritativeIntervalMs?: number | null;
   readonly authoritativeJitterMs?: number | null;
+  readonly deltaTicks?: number;
 }): number {
-  const baseDelayMs = Math.max(1, Math.round(tickRateMs * 1.45));
-  const jitterSlackMs =
-    jitterMs === null ? 0 : Math.min(tickRateMs, Math.round(Math.max(0, jitterMs) * 2));
-  const latencySlackMs =
-    latencyMs === null
-      ? 0
-      : Math.min(
-          Math.round(tickRateMs * 0.35),
-          Math.round(Math.max(0, latencyMs - Math.round(tickRateMs * 0.65)) * 0.35),
-        );
-  const authoritativeIntervalSlackMs =
+  const normalizedDeltaTicks = Math.max(1, Math.round(deltaTicks));
+  const baseDurationMs = Math.max(1, Math.round(tickRateMs * normalizedDeltaTicks));
+  const expectedIntervalMs =
     authoritativeIntervalMs === null || authoritativeIntervalMs === undefined
-      ? 0
-      : Math.max(0, Math.round(authoritativeIntervalMs - tickRateMs));
-  const authoritativeGapSlackMs =
-    authoritativeGapMs === null || authoritativeGapMs === undefined
-      ? 0
-      : Math.max(0, Math.round(Math.max(0, authoritativeGapMs - tickRateMs) * 0.85));
-  const authoritativeJitterSlackMs =
-    authoritativeJitterMs === null || authoritativeJitterMs === undefined
-      ? 0
-      : Math.min(
-          Math.round(tickRateMs * 0.9),
-          Math.round(Math.max(0, authoritativeJitterMs) * 1.8),
-        );
-  const adaptiveSlackMs = Math.max(
-    jitterSlackMs + latencySlackMs,
-    authoritativeIntervalSlackMs + authoritativeJitterSlackMs,
-    authoritativeGapSlackMs,
+      ? baseDurationMs
+      : Math.max(baseDurationMs, Math.round(authoritativeIntervalMs * normalizedDeltaTicks));
+  const observedJitterMs = Math.max(0, jitterMs ?? 0, authoritativeJitterMs ?? 0);
+  const jitterSlackMs = Math.min(
+    Math.round(baseDurationMs * 0.28),
+    Math.round(observedJitterMs * normalizedDeltaTicks * 0.65),
   );
-  const ceilingDelayMs = Math.max(baseDelayMs, Math.round(tickRateMs * 2.4));
+  const baselineSlackMs = Math.round(baseDurationMs * 0.08);
+  const targetDurationMs = Math.max(
+    expectedIntervalMs + baselineSlackMs,
+    baseDurationMs + baselineSlackMs + jitterSlackMs,
+  );
 
-  return clampNumber(baseDelayMs + adaptiveSlackMs, baseDelayMs, ceilingDelayMs);
+  return clampNumber(
+    targetDurationMs,
+    Math.max(1, Math.round(baseDurationMs * 0.96)),
+    Math.max(baseDurationMs, Math.round(baseDurationMs * 1.4)),
+  );
 }
 
 export function resolveAuthoritativeTickPerfMs({

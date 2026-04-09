@@ -85,7 +85,6 @@ export function App() {
   const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
   const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalFocusMode;
-  const floatingTouchOnline = false;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
   const showDesktopArenaHud = desktopGameMode;
@@ -241,7 +240,7 @@ export function App() {
                 : ""
       } ${touchFocusMode ? "app-shell--touch-immersive" : ""} ${
         floatingTouchLocal ? "app-shell--floating-local-dock" : ""
-      } ${floatingTouchOnline ? "app-shell--floating-online-dock" : ""}`}
+      }`}
     >
       <div
         className={`mx-auto flex w-full flex-col ${
@@ -606,7 +605,7 @@ export function App() {
           ) : showTouchControls && touchMode ? (
             <TouchControlsDock
               mode={touchMode}
-              floating={floatingTouchLocal || floatingTouchOnline}
+              floating={floatingTouchLocal}
               compact={floatingTouchLocal}
               suggestLandscape={touchMode === "local"}
               fullscreenSupported={touchFullscreenEnabled}
