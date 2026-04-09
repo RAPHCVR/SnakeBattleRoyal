@@ -18,6 +18,7 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100svh;
+  min-height: 100dvh;
   overflow-x: hidden;
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
@@ -31,10 +32,12 @@ body {
 #root {
   min-height: 100vh;
   min-height: 100svh;
+  min-height: 100dvh;
 }
 
 .app-shell {
   min-height: 100svh;
+  min-height: 100dvh;
   padding-bottom: 1.5rem;
 }
 
@@ -60,6 +63,7 @@ body {
   inset: 0;
   z-index: 40;
   min-height: 100svh;
+  min-height: 100dvh;
   padding:
     calc(0.55rem + env(safe-area-inset-top))
     calc(0.55rem + env(safe-area-inset-right))
@@ -88,6 +92,13 @@ body {
   padding-left: max(5.75rem, calc(14vw + env(safe-area-inset-left)));
   padding-right: max(5.75rem, calc(14vw + env(safe-area-inset-right)));
   padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+}
+
+.app-shell--touch-side-immersive {
+  padding-top: max(4rem, calc(3.25rem + env(safe-area-inset-top)));
+  padding-left: max(1.5rem, calc(5.5vw + env(safe-area-inset-left)));
+  padding-right: max(1.5rem, calc(5.5vw + env(safe-area-inset-right)));
+  padding-bottom: calc(0.45rem + env(safe-area-inset-bottom));
 }
 
 .glass-panel {
@@ -946,6 +957,11 @@ body {
     calc(0.55rem + env(safe-area-inset-left));
 }
 
+.touch-side-controls--immersive {
+  padding-top: calc(0.35rem + env(safe-area-inset-top));
+  padding-bottom: calc(0.35rem + env(safe-area-inset-bottom));
+}
+
 .touch-side-controls__header {
   display: flex;
   align-items: flex-start;
@@ -989,14 +1005,70 @@ body {
 .touch-side-controls__columns {
   display: flex;
   flex: 1;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 0.8rem;
+  min-height: 0;
 }
 
 .touch-side-controls__panel {
   pointer-events: auto;
   width: min(10rem, 24vw);
+  display: flex;
+  min-height: 0;
+}
+
+.touch-side-controls__panel .touch-pad {
+  flex: 1;
+  min-height: 0;
+}
+
+.touch-side-controls--immersive .touch-side-controls__header {
+  justify-content: flex-end;
+  padding-inline: clamp(0.45rem, 2vw, 1.2rem);
+}
+
+.touch-side-controls--immersive .touch-side-controls__intro {
+  display: none;
+}
+
+.touch-side-controls--immersive .touch-side-controls__copy {
+  display: none;
+}
+
+.touch-side-controls--immersive .touch-side-controls__actions {
+  gap: 0.35rem;
+}
+
+.touch-side-controls--immersive .touch-side-controls__columns {
+  gap: 0.55rem;
+  align-items: stretch;
+}
+
+.touch-side-controls--immersive .touch-side-controls__panel {
+  width: clamp(6.8rem, 31vw, 8.2rem);
+}
+
+.touch-side-controls--immersive .touch-pad {
+  gap: 0.45rem;
+  padding: 0.52rem;
+  justify-content: flex-start;
+}
+
+.touch-side-controls--immersive .touch-pad__matrix {
+  flex: 1;
+  aspect-ratio: auto;
+  min-height: 0;
+  min-height: 7rem;
+  gap: 0.35rem;
+}
+
+.touch-side-controls--immersive .touch-pad__button {
+  min-height: clamp(2.45rem, 9.2vh, 3.15rem);
+}
+
+.touch-side-controls--immersive .touch-pad__button-glyph {
+  font-size: 0.58rem;
 }
 
 .touch-side-controls .touch-pad {
@@ -1218,6 +1290,39 @@ body {
     width: 0.9rem;
     height: 0.9rem;
   }
+
+  .app-shell--touch-side-immersive {
+    padding-top: max(2.6rem, calc(2.15rem + env(safe-area-inset-top)));
+    padding-left: max(1rem, calc(4vw + env(safe-area-inset-left)));
+    padding-right: max(1rem, calc(4vw + env(safe-area-inset-right)));
+    padding-bottom: calc(0.2rem + env(safe-area-inset-bottom));
+  }
+
+  .touch-side-controls--immersive .touch-side-controls__header {
+    padding-inline: clamp(0.4rem, 2vw, 1rem);
+  }
+
+  .touch-side-controls--immersive .touch-side-controls__panel {
+    width: clamp(6.1rem, 28vw, 7.25rem);
+  }
+
+  .touch-side-controls--immersive .touch-pad {
+    gap: 0.35rem;
+    padding: 0.42rem;
+    justify-content: flex-start;
+  }
+
+  .touch-side-controls--immersive .touch-pad__matrix {
+    flex: 1;
+    aspect-ratio: auto;
+    min-height: 0;
+    min-height: 6.45rem;
+    gap: 0.25rem;
+  }
+
+  .touch-side-controls--immersive .touch-pad__button {
+    min-height: clamp(2.15rem, 8.2vh, 2.85rem);
+  }
 }
 
 @media (max-width: 420px) {
@@ -1391,6 +1496,32 @@ body {
     min-height: 1.65rem;
     padding: 0.22rem 0.58rem;
     font-size: 0.64rem;
+  }
+
+  .touch-side-controls--immersive .touch-side-controls__header {
+    padding-inline: clamp(0.35rem, 1.8vw, 0.95rem);
+  }
+
+  .touch-side-controls--immersive .touch-side-controls__panel {
+    width: clamp(5.95rem, 26vw, 6.95rem);
+  }
+
+  .touch-side-controls--immersive .touch-pad {
+    gap: 0.28rem;
+    padding: 0.32rem;
+    justify-content: flex-start;
+  }
+
+  .touch-side-controls--immersive .touch-pad__matrix {
+    flex: 1;
+    aspect-ratio: auto;
+    min-height: 0;
+    min-height: 5.95rem;
+    gap: 0.2rem;
+  }
+
+  .touch-side-controls--immersive .touch-pad__button {
+    min-height: clamp(2rem, 7.4vh, 2.55rem);
   }
 
 }

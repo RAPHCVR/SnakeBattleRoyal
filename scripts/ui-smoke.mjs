@@ -428,8 +428,19 @@ async function runMobileLocalFullscreenScenario() {
   await page.screenshot({ path: screenshotPath, fullPage: false });
 
   pushAssertion("mobile local fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion(
+    "mobile local fullscreen keeps a larger square arena",
+    (snapshot.canvas?.cssWidth ?? 0) >= 250,
+    snapshot.canvas,
+  );
   pushAssertion("mobile local fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
   pushAssertion("mobile local fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
+  pushAssertion(
+    "mobile local fullscreen stretches the touch grids vertically",
+    snapshot.touchPadMatrices.length === 2 &&
+      snapshot.touchPadMatrices.every((matrix) => matrix.height > matrix.width * 1.15),
+    snapshot.touchPadMatrices,
+  );
   pushAssertion(
     "mobile local fullscreen keeps every control visible",
     snapshot.buttons.every((button) => !button.outOfViewport),
@@ -482,8 +493,19 @@ async function runAndroidMobileLocalFullscreenScenario() {
     fullscreenState,
   );
   pushAssertion("android mobile fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion(
+    "android mobile fullscreen keeps a larger square arena",
+    (snapshot.canvas?.cssWidth ?? 0) >= 300,
+    snapshot.canvas,
+  );
   pushAssertion("android mobile fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
   pushAssertion("android mobile fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
+  pushAssertion(
+    "android mobile fullscreen stretches the touch grids vertically",
+    snapshot.touchPadMatrices.length === 2 &&
+      snapshot.touchPadMatrices.every((matrix) => matrix.height > matrix.width * 1.15),
+    snapshot.touchPadMatrices,
+  );
   pushAssertion(
     "android mobile fullscreen keeps every control visible",
     snapshot.buttons.every((button) => !button.outOfViewport),
@@ -841,6 +863,8 @@ async function collectSnapshot(page) {
       footer: "footer.glass-panel",
       touchDock: ".touch-dock",
       touchSideControls: ".touch-side-controls",
+      touchPad: ".touch-pad",
+      touchPadMatrix: ".touch-pad__matrix",
       touchStatusChip: "[data-touch-status-chip='true']",
       loader: ".loader-orbit",
     };
@@ -914,6 +938,60 @@ async function collectSnapshot(page) {
       footer: rectOf(selectors.footer),
       touchDock: rectOf(selectors.touchDock),
       touchSideControls: rectOf(selectors.touchSideControls),
+      touchPads: Array.from(document.querySelectorAll(selectors.touchPad))
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          const style = window.getComputedStyle(node);
+          const visible =
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number.parseFloat(style.opacity || "1") > 0.05;
+
+          return {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            right: Math.round(rect.right),
+            bottom: Math.round(rect.bottom),
+            visible,
+            outOfViewport:
+              rect.x < -1 ||
+              rect.y < -1 ||
+              rect.right > window.innerWidth + 1 ||
+              rect.bottom > window.innerHeight + 1,
+          };
+        })
+        .filter((pad) => pad.visible),
+      touchPadMatrices: Array.from(document.querySelectorAll(selectors.touchPadMatrix))
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          const style = window.getComputedStyle(node);
+          const visible =
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number.parseFloat(style.opacity || "1") > 0.05;
+
+          return {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            right: Math.round(rect.right),
+            bottom: Math.round(rect.bottom),
+            visible,
+            outOfViewport:
+              rect.x < -1 ||
+              rect.y < -1 ||
+              rect.right > window.innerWidth + 1 ||
+              rect.bottom > window.innerHeight + 1,
+          };
+        })
+        .filter((matrix) => matrix.visible),
       loader: rectOf(selectors.loader),
       touchStatusChip: (() => {
         const node = document.querySelector(selectors.touchStatusChip);

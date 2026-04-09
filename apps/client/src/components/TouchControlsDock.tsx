@@ -237,6 +237,7 @@ interface LandscapeSplitControlsProps {
   readonly onTogglePause: () => void;
   readonly fullscreenSupported: boolean;
   readonly fullscreenActive: boolean;
+  readonly immersive?: boolean;
   readonly onToggleFullscreen: () => void;
 }
 
@@ -250,6 +251,7 @@ export function LandscapeSplitControls({
   onTogglePause,
   fullscreenSupported,
   fullscreenActive,
+  immersive = false,
   onToggleFullscreen,
 }: LandscapeSplitControlsProps) {
   const enqueueLocalInput = useLocalGameStore((state) => state.enqueueLocalInput);
@@ -261,7 +263,7 @@ export function LandscapeSplitControls({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.12, ease: "easeOut" }}
-      className="touch-side-controls"
+      className={`touch-side-controls${immersive ? " touch-side-controls--immersive" : ""}`}
       aria-label="Commandes tactiles locales"
     >
       <div className="touch-side-controls__header">

@@ -80,6 +80,7 @@ export function App() {
   const touchLocalImmersiveMode = touchMode === "local" && (fullscreen.active || touchLocalFocusMode);
   const touchOnlineImmersiveMode = touchMode === "online" && (fullscreen.active || touchOnlineFocusMode);
   const touchFocusMode = touchLocalImmersiveMode || touchOnlineImmersiveMode;
+  const touchSideImmersiveMode = touchMode === "local" && touchLocalImmersiveMode;
   const splitTouchLocal =
     touchMode === "local" && (orientation === "landscape" || touchLocalImmersiveMode);
   const showTouchControls =
@@ -273,7 +274,7 @@ export function App() {
               : "px-4 py-5 sm:px-6 sm:py-6 lg:px-8"
       } ${
         splitTouchLocal
-          ? "app-shell--touch-side"
+          ? `app-shell--touch-side${touchSideImmersiveMode ? " app-shell--touch-side-immersive" : ""}`
           : desktopGameMode
             ? "app-shell--desktop-game"
             : touchMode === "local"
@@ -643,6 +644,7 @@ export function App() {
               onTogglePause={togglePause}
               fullscreenSupported
               fullscreenActive={touchLocalImmersiveMode}
+              immersive={touchSideImmersiveMode}
               onToggleFullscreen={handleToggleTouchFullscreen}
             />
           ) : showTouchControls && touchMode ? (

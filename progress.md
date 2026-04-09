@@ -116,3 +116,17 @@ Original prompt: Utilise les subagents si pertinent, fais un tour complet et nic
   - les largeurs/paddings des colonnes laterales sont reduits sur mobile pour garder tous les boutons dans la viewport.
 - Smoke QA renforce:
   - ajout d'une assertion explicite pour verifier que tous les boutons du mode local fullscreen restent visibles.
+
+2026-04-09, fullscreen height density follow-up:
+- Mode local fullscreen mobile densifie:
+  - suppression de la bulle d'intro immersive dans le bandeau haut;
+  - colonnes laterales et grilles D-pad passent en mode vertical stretch au lieu de rester quasi-carrees;
+  - viewport mobile base sur `100dvh` en plus de `100svh` pour mieux exploiter la hauteur disponible.
+- Smoke QA:
+  - ajout d'une verification sur la hauteur des grilles tactiles fullscreen (`touch-pad__matrix`);
+  - captures revalidees sur iPhone SE et Pixel 5 fullscreen.
+- Validation finale:
+  - `npm run typecheck --workspace @snake-duel/client`: OK
+  - `npm run test --workspace @snake-duel/client`: OK
+  - `npm run build --workspace @snake-duel/client`: OK
+  - `npm run qa:smoke`: OK (80 assertions)
