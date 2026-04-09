@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeArenaBoardLayout } from "./boardLayout.js";
 import {
   alignWorldPosition,
+  interpolateAlignedGridMotion,
   interpolateTimedWorld,
   resolveWrappedWorld,
 } from "./segmentMotion.js";
@@ -48,6 +49,28 @@ describe("segmentMotion", () => {
         100,
       ),
     ).toEqual({ x: 60, y: 220 });
+  });
+
+  it("interpolates aligned grid motion across a wrap without drifting", () => {
+    const wrapped = interpolateAlignedGridMotion(
+      layout,
+      { x: 19, y: 5 },
+      { x: 0, y: 5 },
+      50,
+      100,
+    );
+
+    expect(wrapped.targetWorld).toEqual({ x: 820, y: 220 });
+    expect(wrapped.world).toEqual({ x: 800, y: 220 });
+  });
+
+  it("interpolates aligned grid motion on a straight axis", () => {
+    const start = { x: 6, y: 8 };
+    const end = { x: 6, y: 7 };
+    const sample = interpolateAlignedGridMotion(layout, start, end, 50, 100);
+
+    expect(sample.targetWorld).toEqual({ x: 260, y: 300 });
+    expect(sample.world).toEqual({ x: 260, y: 320 });
   });
 
   it("returns a ghost render when the segment moves outside the board", () => {

@@ -78,7 +78,7 @@ export function App() {
   const touchLocalFocusMode = touchMode === "local" && localFocusMode;
   const touchOnlineFocusMode = touchMode === "online" && onlineFocusMode;
   const touchFocusMode = touchLocalFocusMode || touchOnlineFocusMode;
-  const splitTouchLocal = touchMode === "local" && orientation === "landscape";
+  const splitTouchLocal = touchMode === "local" && (orientation === "landscape" || touchLocalFocusMode);
   const showTouchControls =
     Boolean(touchMode) && !isMenu && !isMatchmaking && gameState.status !== "game_over";
   const desktopGameMode = !isMenu && !touchMode;

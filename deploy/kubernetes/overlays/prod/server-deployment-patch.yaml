@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snake-duel-server
+  annotations:
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 1m"
+spec:
+  template:
+    spec:
+      nodeSelector:
+        topology.kubernetes.io/region: paris
+        topology.kubernetes.io/zone: dc
+      imagePullSecrets:
+        - name: ghcr-secret

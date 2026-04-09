@@ -427,7 +427,13 @@ async function runMobileLocalFullscreenScenario() {
   await page.screenshot({ path: screenshotPath, fullPage: false });
 
   pushAssertion("mobile local fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
-  pushAssertion("mobile local fullscreen keeps the dock within viewport", !snapshot.touchDock?.outOfViewport, snapshot.touchDock);
+  pushAssertion("mobile local fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
+  pushAssertion("mobile local fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
+  pushAssertion(
+    "mobile local fullscreen keeps every control visible",
+    snapshot.buttons.every((button) => !button.outOfViewport),
+    snapshot.buttons,
+  );
   pushAssertion("mobile local fullscreen keeps the arena within viewport", !snapshot.section?.outOfViewport, snapshot.section);
   pushAssertion(
     "mobile local fullscreen keeps a dense backing canvas",

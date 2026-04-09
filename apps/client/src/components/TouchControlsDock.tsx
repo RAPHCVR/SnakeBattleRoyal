@@ -196,7 +196,7 @@ export function TouchControlsDock({
           <div className="touch-dock__note">
             <span className="touch-dock__note-pill">
               {suggestLandscape
-                ? "Astuce mobile: passe en paysage pour un pad par joueur sur chaque cote."
+                ? "Astuce mobile: le plein ecran place J1 a gauche et J2 a droite. Le paysage reste le plus confortable."
                 : "Deux pads separes pour bufferiser les changements de direction."}
             </span>
           </div>
@@ -262,7 +262,7 @@ export function LandscapeSplitControls({
       exit={{ opacity: 0 }}
       transition={{ duration: 0.12, ease: "easeOut" }}
       className="touch-side-controls"
-      aria-label="Commandes tactiles paysage"
+      aria-label="Commandes tactiles locales"
     >
       <div className="touch-side-controls__header">
         <div className="touch-side-controls__intro">
@@ -295,6 +295,8 @@ export function LandscapeSplitControls({
             title="J1"
             subtitle="Main gauche"
             accent="teal"
+            compact
+            hideMeta
             onInput={(direction) => enqueueLocalInput("player1", direction)}
           />
         </div>
@@ -303,6 +305,8 @@ export function LandscapeSplitControls({
             title="J2"
             subtitle="Main droite"
             accent="orange"
+            compact
+            hideMeta
             onInput={(direction) => enqueueLocalInput("player2", direction)}
           />
         </div>

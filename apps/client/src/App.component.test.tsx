@@ -2,7 +2,7 @@
 
 import "./test/setup-component.js";
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DEFAULT_GAME_CONFIG, type GameState, type SnakeState } from "@snake-duel/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,11 +58,20 @@ vi.mock("./components/TouchControlsDock.js", () => ({
   TouchControlsDock: ({
     mode,
     floating,
+    onToggleFullscreen,
   }: {
     readonly mode: string;
     readonly floating?: boolean;
+    readonly onToggleFullscreen?: () => void;
   }) => (
-    <div data-testid="touch-controls-dock">dock:{mode}:{floating ? "floating" : "inline"}</div>
+    <div data-testid="touch-controls-dock">
+      dock:{mode}:{floating ? "floating" : "inline"}
+      {onToggleFullscreen ? (
+        <button type="button" onClick={onToggleFullscreen}>
+          Plein ecran
+        </button>
+      ) : null}
+    </div>
   ),
   LandscapeSplitControls: () => <div data-testid="touch-controls-landscape">landscape</div>,
 }));
@@ -99,6 +108,22 @@ describe("App component states", () => {
 
     expect(await screen.findByTestId("touch-controls-dock")).toHaveTextContent("dock:local:floating");
     expect(screen.getByText("Chargement du rendu Phaser...")).toBeInTheDocument();
+  });
+
+  it("switches local touch fullscreen into split side controls", () => {
+    mocks.controls.coarsePointer = true;
+    mocks.controls.orientation = "portrait";
+    mocks.storeState = createStoreState({
+      mode: "local",
+      gameState: createGameState("running"),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Plein ecran" }));
+
+    expect(screen.getByTestId("touch-controls-landscape")).toBeInTheDocument();
+    expect(screen.queryByTestId("touch-controls-dock")).not.toBeInTheDocument();
   });
 
   it("hides touch controls after local game over while keeping the end screen visible", () => {

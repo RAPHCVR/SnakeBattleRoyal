@@ -11,6 +11,11 @@ export interface WrapRenderState {
   readonly ghost: WorldPoint | null;
 }
 
+export interface InterpolatedGridMotion {
+  readonly world: WorldPoint;
+  readonly targetWorld: WorldPoint;
+}
+
 export function alignWorldPosition(
   layout: ArenaBoardLayout,
   anchorWorld: WorldPoint,
@@ -37,6 +42,22 @@ export function interpolateTimedWorld(
   return {
     x: linear(start.x, target.x, progress),
     y: linear(start.y, target.y, progress),
+  };
+}
+
+export function interpolateAlignedGridMotion(
+  layout: ArenaBoardLayout,
+  from: GridPosition,
+  to: GridPosition,
+  elapsedMs: number,
+  durationMs: number,
+): InterpolatedGridMotion {
+  const startWorld = toBoardPosition(layout, from);
+  const targetWorld = alignWorldPosition(layout, startWorld, to);
+
+  return {
+    world: interpolateTimedWorld(startWorld, targetWorld, elapsedMs, durationMs),
+    targetWorld,
   };
 }
 

@@ -89,3 +89,30 @@ Original prompt: Utilise les subagents si pertinent, fais un tour complet et nic
   - `npm run build --workspace @snake-duel/client`: OK
   - `npm run build --workspace @snake-duel/server`: OK
   - `npm run qa:smoke`: OK (37 assertions)
+
+2026-04-08, fullscreen/render follow-up:
+- Correctif du rendu Phaser:
+  - abandon du faux `resolution`/recreate runtime Phaser qui cassait le build;
+  - nouveau calcul de backing-store (`canvasSizing.ts`) pour garder un canvas net, avec supersampling borne sur mobile/retina;
+  - la scene Phaser recalcule maintenant la taille du plateau, des cellules, des segments, du wrap et des particules a chaque resize (`boardLayout.ts` + `SnakeArenaScene.ts`) au lieu d'etirer un plateau fixe de 640 px.
+- Correctif fullscreen tactile:
+  - le mode tactile fullscreen reste sur le shell immersif de l'app; plus d'usage du vrai fullscreen navigateur sur mobile local, ce qui cible le zoom infini constate sur telephone.
+- QA ajoutee:
+  - smoke enrichie avec des assertions sur le backing-store reel du canvas en mobile fullscreen et desktop online;
+  - captures verifiees: `mobile-local-iphone-se-fullscreen.png`, `desktop-online-waiting.png`, `mobile-online-iphone-14pm.png`.
+- Validation locale:
+  - `npm run test --workspace @snake-duel/client`: OK
+  - `npm run typecheck --workspace @snake-duel/client`: OK
+  - `npm run build --workspace @snake-duel/client`: OK
+  - `npm run qa:smoke`: OK (44 assertions)
+  - snapshots canvas:
+    - desktop online waiting: `1188x1188` affiche / `1188x1188` backing
+    - iPhone SE fullscreen local: `282x282` affiche / `564x564` backing
+    - iPhone 14 Pro Max online: `370x292` affiche / `740x584` backing
+
+2026-04-09, fullscreen side-controls follow-up:
+- Ajustement du mode local fullscreen mobile:
+  - les pads lateraux passent en version compacte et sans meta pour eviter le debordement sur petits ecrans portrait;
+  - les largeurs/paddings des colonnes laterales sont reduits sur mobile pour garder tous les boutons dans la viewport.
+- Smoke QA renforce:
+  - ajout d'une assertion explicite pour verifier que tous les boutons du mode local fullscreen restent visibles.

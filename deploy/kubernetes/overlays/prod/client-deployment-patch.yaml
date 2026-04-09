@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snake-duel-client
+  annotations:
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 1m"
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret

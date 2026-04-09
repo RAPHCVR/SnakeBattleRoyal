@@ -1191,6 +1191,33 @@ body {
   .touch-side-controls__copy {
     display: none;
   }
+
+  .touch-side-controls__columns {
+    gap: 0.55rem;
+  }
+
+  .touch-side-controls__panel {
+    width: clamp(7.25rem, 37vw, 9rem);
+  }
+
+  .touch-side-controls .touch-pad {
+    gap: 0.35rem;
+    padding: 0.45rem;
+  }
+
+  .touch-side-controls .touch-pad--compact .touch-pad__matrix {
+    min-height: clamp(5.6rem, 28vw, 6.4rem);
+    gap: 0.2rem;
+  }
+
+  .touch-side-controls .touch-pad--compact .touch-pad__button {
+    min-height: clamp(1.75rem, 7vw, 2.25rem);
+  }
+
+  .touch-side-controls .touch-pad--compact .touch-pad__icon {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
 }
 
 @media (max-width: 420px) {

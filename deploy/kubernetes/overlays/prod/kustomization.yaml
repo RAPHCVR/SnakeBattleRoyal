@@ -19,5 +19,7 @@ images:
     newTag: latest
 
 patches:
+  - path: client-deployment-patch.yaml
+  - path: server-deployment-patch.yaml
   - path: client-ingress-patch.yaml
   - path: server-ingress-patch.yaml
