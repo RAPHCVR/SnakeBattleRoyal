@@ -26,7 +26,6 @@ const PhaserViewport = lazy(loadPhaserViewport);
 export function App() {
   const shellRef = useRef<HTMLElement | null>(null);
   const [localFocusMode, setLocalFocusMode] = useState(false);
-  const [onlineFocusMode, setOnlineFocusMode] = useState(false);
 
   useKeyboardControls();
   useEffect(() => () => destroyLocalGameLoop(), []);
@@ -76,19 +75,16 @@ export function App() {
     (isLocal || isOnline);
   const touchMode = coarsePointer ? (isLocal ? "local" : isOnline ? "online" : null) : null;
   const touchLocalFocusMode = touchMode === "local" && localFocusMode;
-  const touchOnlineFocusMode = touchMode === "online" && onlineFocusMode;
   const touchLocalImmersiveMode = touchMode === "local" && (fullscreen.active || touchLocalFocusMode);
-  const touchOnlineImmersiveMode = touchMode === "online" && (fullscreen.active || touchOnlineFocusMode);
-  const touchFocusMode = touchLocalImmersiveMode || touchOnlineImmersiveMode;
+  const touchFocusMode = touchLocalImmersiveMode;
   const touchSideImmersiveMode = touchMode === "local" && touchLocalImmersiveMode;
-  const splitTouchLocal =
-    touchMode === "local" && (orientation === "landscape" || touchLocalImmersiveMode);
+  const splitTouchLocal = touchMode === "local" && orientation === "landscape";
   const showTouchControls =
     Boolean(touchMode) && !isMenu && !isMatchmaking && gameState.status !== "game_over";
   const desktopGameMode = !isMenu && !touchMode;
   const immersiveDesktopMode = desktopGameMode && fullscreen.active;
   const shouldRenderPhaser = !isMenu;
-  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal && !touchLocalImmersiveMode;
+  const floatingTouchLocal = touchMode === "local" && !splitTouchLocal;
   const mobileMenu = coarsePointer && isMenu;
   const showHeader = isMenu && !mobileMenu;
   const showDesktopArenaHud = desktopGameMode;
@@ -172,7 +168,7 @@ export function App() {
   const handleToggleTouchFullscreen = async () => {
     if (touchMode === "local") {
       if (fullscreen.active) {
-        await fullscreen.toggle(shellRef.current);
+        await fullscreen.toggle(shellRef.current, { orientation: "landscape" });
         return;
       }
 
@@ -181,7 +177,7 @@ export function App() {
         return;
       }
 
-      const entered = await fullscreen.toggle(shellRef.current);
+      const entered = await fullscreen.toggle(shellRef.current, { orientation: "landscape" });
       if (!entered) {
         setLocalFocusMode(true);
       }
@@ -190,19 +186,11 @@ export function App() {
 
     if (touchMode === "online") {
       if (fullscreen.active) {
-        await fullscreen.toggle(shellRef.current);
+        await fullscreen.toggle(shellRef.current, { orientation: "portrait" });
         return;
       }
 
-      if (touchOnlineFocusMode) {
-        setOnlineFocusMode(false);
-        return;
-      }
-
-      const entered = await fullscreen.toggle(shellRef.current);
-      if (!entered) {
-        setOnlineFocusMode(true);
-      }
+      await fullscreen.toggle(shellRef.current, { orientation: "portrait" });
       return;
     }
 
@@ -227,9 +215,8 @@ export function App() {
   }, [shouldLockBodyScroll]);
 
   useEffect(() => {
-    if (!coarsePointer || (mode !== "online" && mode !== "local")) {
+    if (!coarsePointer || mode !== "local") {
       setLocalFocusMode(false);
-      setOnlineFocusMode(false);
     }
   }, [coarsePointer, mode]);
 
@@ -242,10 +229,7 @@ export function App() {
       setLocalFocusMode(false);
     }
 
-    if (touchOnlineFocusMode) {
-      setOnlineFocusMode(false);
-    }
-  }, [fullscreen.active, touchLocalFocusMode, touchOnlineFocusMode]);
+  }, [fullscreen.active, touchLocalFocusMode]);
 
   const primePhaserViewport = () => {
     void loadPhaserViewport();
@@ -423,7 +407,7 @@ export function App() {
         <section
           className={`glass-panel relative overflow-hidden ${
             touchFocusMode
-              ? "flex-1 min-h-0 p-2 sm:p-3"
+              ? "flex-1 min-h-0 p-1.5 sm:p-2"
               : desktopGameMode
                 ? desktopSectionPaddingClass
                 : splitTouchLocal
@@ -654,7 +638,7 @@ export function App() {
               compact={floatingTouchLocal}
               suggestLandscape={touchMode === "local"}
               fullscreenSupported={touchFullscreenEnabled}
-              fullscreenActive={touchMode === "online" ? touchOnlineImmersiveMode : touchLocalImmersiveMode}
+              fullscreenActive={fullscreen.active}
               onToggleFullscreen={handleToggleTouchFullscreen}
               {...(touchMode === "local" && canPauseLocal
                 ? {

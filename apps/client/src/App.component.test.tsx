@@ -110,7 +110,7 @@ describe("App component states", () => {
     expect(screen.getByText("Chargement du rendu Phaser...")).toBeInTheDocument();
   });
 
-  it("tries browser fullscreen before falling back to split side controls", async () => {
+  it("keeps the portrait fullscreen fallback on the compact floating dock", async () => {
     mocks.controls.coarsePointer = true;
     mocks.controls.orientation = "portrait";
     mocks.storeState = createStoreState({
@@ -123,8 +123,12 @@ describe("App component states", () => {
     fireEvent.click(screen.getByRole("button", { name: "Plein ecran" }));
 
     await waitFor(() => expect(mocks.controls.fullscreen.toggle).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId("touch-controls-landscape")).toBeInTheDocument());
-    expect(screen.queryByTestId("touch-controls-dock")).not.toBeInTheDocument();
+    expect(mocks.controls.fullscreen.toggle).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({ orientation: "landscape" }),
+    );
+    await waitFor(() => expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:local:floating"));
+    expect(screen.queryByTestId("touch-controls-landscape")).not.toBeInTheDocument();
   });
 
   it("hides touch controls after local game over while keeping the end screen visible", () => {
@@ -160,6 +164,33 @@ describe("App component states", () => {
     expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:online:inline");
     expect(screen.getAllByText("Room en attente")).not.toHaveLength(0);
     expect(screen.getByText(/En attente d'un adversaire/i)).toBeInTheDocument();
+  });
+
+  it("keeps online fullscreen in the inline portrait layout", async () => {
+    mocks.controls.coarsePointer = true;
+    mocks.storeState = createStoreState({
+      mode: "online",
+      gameState: createGameState("waiting"),
+      online: {
+        connectedPlayers: 1,
+        ownSnakeId: "player1",
+        roomId: "ABCD",
+        roomStatus: "waiting",
+        waitingForOpponent: true,
+      },
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Plein ecran" }));
+
+    await waitFor(() => expect(mocks.controls.fullscreen.toggle).toHaveBeenCalledTimes(1));
+    expect(mocks.controls.fullscreen.toggle).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({ orientation: "portrait" }),
+    );
+    expect(screen.getByTestId("touch-controls-dock")).toHaveTextContent("dock:online:inline");
+    expect(screen.queryByTestId("touch-controls-landscape")).not.toBeInTheDocument();
   });
 
   it("hides raw network telemetry during stable online play", () => {

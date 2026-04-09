@@ -53,6 +53,7 @@ try {
   results.push(await runAndroidPortraitScenario());
   results.push(await runAndroidLandscapeScenario());
   results.push(await runMobileOnlineWaitingScenario());
+  results.push(await runMobileOnlineFullscreenScenario());
   results.push(await runOnlineWaitingScenario());
   results.push(await runWebkitOnlineScenario());
 
@@ -430,17 +431,11 @@ async function runMobileLocalFullscreenScenario() {
   pushAssertion("mobile local fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
   pushAssertion(
     "mobile local fullscreen keeps a larger square arena",
-    (snapshot.canvas?.cssWidth ?? 0) >= 250,
+    (snapshot.canvas?.cssWidth ?? 0) >= 280,
     snapshot.canvas,
   );
-  pushAssertion("mobile local fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
-  pushAssertion("mobile local fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
-  pushAssertion(
-    "mobile local fullscreen stretches the touch grids vertically",
-    snapshot.touchPadMatrices.length === 2 &&
-      snapshot.touchPadMatrices.every((matrix) => matrix.height > matrix.width * 1.15),
-    snapshot.touchPadMatrices,
-  );
+  pushAssertion("mobile local fullscreen keeps the floating dock visible", snapshot.touchDock !== null, snapshot.touchDock);
+  pushAssertion("mobile local fullscreen does not switch to side controls", snapshot.touchSideControls === null, snapshot.touchSideControls);
   pushAssertion(
     "mobile local fullscreen keeps every control visible",
     snapshot.buttons.every((button) => !button.outOfViewport),
@@ -455,8 +450,8 @@ async function runMobileLocalFullscreenScenario() {
     snapshot.canvas,
   );
   pushAssertion(
-    "mobile local fullscreen exposes an exit action",
-    snapshot.buttons.some((button) => /quitter/i.test(button.text)),
+    "mobile local fullscreen keeps the fullscreen toggle visible",
+    snapshot.buttons.some((button) => /plein ecran|quitter/i.test(button.text)),
     snapshot.buttons,
   );
   pushAssertion("mobile local fullscreen has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
@@ -495,17 +490,11 @@ async function runAndroidMobileLocalFullscreenScenario() {
   pushAssertion("android mobile fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
   pushAssertion(
     "android mobile fullscreen keeps a larger square arena",
-    (snapshot.canvas?.cssWidth ?? 0) >= 300,
+    (snapshot.canvas?.cssWidth ?? 0) >= 350,
     snapshot.canvas,
   );
-  pushAssertion("android mobile fullscreen uses side controls", snapshot.touchSideControls !== null, snapshot.touchSideControls);
-  pushAssertion("android mobile fullscreen hides the bottom dock", snapshot.touchDock === null, snapshot.touchDock);
-  pushAssertion(
-    "android mobile fullscreen stretches the touch grids vertically",
-    snapshot.touchPadMatrices.length === 2 &&
-      snapshot.touchPadMatrices.every((matrix) => matrix.height > matrix.width * 1.15),
-    snapshot.touchPadMatrices,
-  );
+  pushAssertion("android mobile fullscreen keeps the floating dock visible", snapshot.touchDock !== null, snapshot.touchDock);
+  pushAssertion("android mobile fullscreen does not switch to side controls", snapshot.touchSideControls === null, snapshot.touchSideControls);
   pushAssertion(
     "android mobile fullscreen keeps every control visible",
     snapshot.buttons.every((button) => !button.outOfViewport),
@@ -729,6 +718,49 @@ async function runMobileOnlineWaitingScenario() {
   await browser.close();
 
   return { scenario: "mobile-online-waiting-pixel5", screenshotPath, snapshot, issues, bodyText };
+}
+
+async function runMobileOnlineFullscreenScenario() {
+  const browser = await chromium.launch({ headless: true });
+  const device = devices["Pixel 5"];
+  const context = await browser.newContext({ ...device });
+  const page = await context.newPage();
+  const issues = attachIssueCollectors(page);
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Jouer en Ligne/i }).click();
+  await page.waitForTimeout(2500);
+  await page.getByRole("button", { name: /Plein ecran/i }).click();
+  await page.waitForTimeout(500);
+
+  const snapshot = await collectSnapshot(page);
+  const fullscreenState = await page.evaluate(() => ({
+    active: Boolean(document.fullscreenElement),
+    tagName: document.fullscreenElement?.tagName ?? null,
+  }));
+  const screenshotPath = path.join(artifactsDir, "mobile-online-pixel5-fullscreen.png");
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  pushAssertion(
+    "mobile online fullscreen enters browser fullscreen",
+    fullscreenState.active === true && fullscreenState.tagName === "MAIN",
+    fullscreenState,
+  );
+  pushAssertion("mobile online fullscreen keeps the inline dock", snapshot.touchDock !== null, snapshot.touchDock);
+  pushAssertion("mobile online fullscreen does not switch to side controls", snapshot.touchSideControls === null, snapshot.touchSideControls);
+  pushAssertion("mobile online fullscreen has no vertical scroll", !snapshot.scroll.hasVerticalScroll, snapshot.scroll);
+  pushAssertion(
+    "mobile online fullscreen keeps every control visible",
+    snapshot.buttons.every((button) => !button.outOfViewport),
+    snapshot.buttons,
+  );
+  pushAssertion("mobile online fullscreen has no page errors", issues.pageErrors.length === 0, issues.pageErrors);
+  pushAssertion("mobile online fullscreen has no request failures", issues.requestFailures.length === 0, issues.requestFailures);
+
+  await context.close();
+  await browser.close();
+
+  return { scenario: "mobile-online-pixel5-fullscreen", screenshotPath, snapshot, fullscreenState, issues };
 }
 
 async function runOnlineWaitingScenario() {

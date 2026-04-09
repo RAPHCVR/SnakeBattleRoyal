@@ -126,8 +126,14 @@ export function useViewportOrientation(): ViewportOrientation {
 interface FullscreenState {
   readonly supported: boolean;
   readonly active: boolean;
-  readonly toggle: (target?: HTMLElement | null) => Promise<boolean>;
+  readonly toggle: (target?: HTMLElement | null, options?: FullscreenToggleOptions) => Promise<boolean>;
 }
+
+interface FullscreenToggleOptions {
+  readonly orientation?: FullscreenOrientation;
+}
+
+type FullscreenOrientation = "landscape" | "portrait";
 
 type FullscreenCapableElement = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void;
@@ -160,7 +166,7 @@ export function useFullscreenSession(): FullscreenState {
     };
   }, []);
 
-  const toggle = async (target?: HTMLElement | null) => {
+  const toggle = async (target?: HTMLElement | null, options?: FullscreenToggleOptions) => {
     const active = isFullscreenActive();
 
     if (active) {
@@ -170,7 +176,7 @@ export function useFullscreenSession(): FullscreenState {
     }
 
     const element = target ?? document.documentElement;
-    const entered = await requestFullscreen(element);
+    const entered = await requestFullscreen(element, options?.orientation ?? "landscape");
     setState(readFullscreenState());
     return entered;
   };
@@ -273,17 +279,20 @@ function isFullscreenActive(): boolean {
   return Boolean(document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement);
 }
 
-async function requestFullscreen(target: HTMLElement): Promise<boolean> {
+async function requestFullscreen(
+  target: HTMLElement,
+  orientation: FullscreenOrientation,
+): Promise<boolean> {
   const fullscreenTarget = target as FullscreenCapableElement;
   if (typeof target.requestFullscreen === "function") {
     try {
       await target.requestFullscreen({ navigationUI: "hide" });
-      await lockLandscapeOrientation();
+      await lockScreenOrientation(orientation);
       return true;
     } catch {
       try {
         await target.requestFullscreen();
-        await lockLandscapeOrientation();
+        await lockScreenOrientation(orientation);
         return true;
       } catch {
         return false;
@@ -298,7 +307,7 @@ async function requestFullscreen(target: HTMLElement): Promise<boolean> {
 
   try {
     await nativeRequest.call(target);
-    await lockLandscapeOrientation();
+    await lockScreenOrientation(orientation);
     return true;
   } catch {
     return false;
@@ -328,10 +337,10 @@ async function exitFullscreen(): Promise<void> {
   }
 }
 
-async function lockLandscapeOrientation(): Promise<void> {
+async function lockScreenOrientation(orientation: FullscreenOrientation): Promise<void> {
   try {
-    const orientation = screen.orientation as LockableScreenOrientation | undefined;
-    await orientation?.lock?.("landscape");
+    const screenOrientation = screen.orientation as LockableScreenOrientation | undefined;
+    await screenOrientation?.lock?.(orientation);
   } catch {
     // Ignore unsupported orientation lock requests.
   }
